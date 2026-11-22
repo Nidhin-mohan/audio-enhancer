@@ -1,18 +1,12 @@
 import { useEffect, useState } from "react";
 import type { MixdownFormat, MixdownLoudness, Studio, StudioState } from "../engine/studio";
+import { Section, Segmented } from "./controls";
 
-const FORMATS: { value: MixdownFormat; label: string }[] = [
-  { value: "mp3", label: "MP3 · 320 kbps (plays everywhere)" },
-  { value: "wav", label: "WAV · 16-bit (lossless, large)" },
-  { value: "aac", label: "AAC · 256 kbps (.m4a)" },
-];
-const LOUDNESS: { value: MixdownLoudness; label: string }[] = [
-  { value: -14, label: "-14 LUFS · streaming (recommended)" },
-  { value: -16, label: "-16 LUFS · a little quieter" },
-  { value: -9, label: "-9 LUFS · loud" },
-];
-
-type ExportStatus = { kind: "idle" } | { kind: "running"; progress: number } | { kind: "done"; fileName: string } | { kind: "error"; message: string };
+type ExportStatus =
+  | { kind: "idle" }
+  | { kind: "running"; progress: number }
+  | { kind: "done"; fileName: string }
+  | { kind: "error"; message: string };
 
 /** Hand a finished file to the browser's normal download/save flow. */
 function saveFile(blob: Blob, fileName: string) {
@@ -42,7 +36,18 @@ export function useMixdownExport(studio: Studio) {
   return { status, run };
 }
 
-export function MixdownPanel(props: {
+const FORMAT_HINT: Record<MixdownFormat, string> = {
+  mp3: "MP3 · 320 kbps — plays everywhere (WhatsApp, Instagram, YouTube…)",
+  wav: "WAV · 16-bit — lossless, large file",
+  aac: "AAC · 256 kbps (.m4a) — small, great quality",
+};
+const LOUDNESS_HINT: Record<MixdownLoudness, string> = {
+  [-16]: "-16 LUFS — a little quieter, more dynamic",
+  [-14]: "-14 LUFS — the standard for streaming apps",
+  [-9]: "-9 LUFS — loud, like commercial pop",
+};
+
+export function MixdownSection(props: {
   studio: Studio;
   state: StudioState;
   exporter: ReturnType<typeof useMixdownExport>;
@@ -54,54 +59,61 @@ export function MixdownPanel(props: {
     void studio.supportedMixdownFormats().then(setSupported);
   }, [studio, state.recording]);
   const { status } = exporter;
-  const disabled = !state.recording || status.kind === "running";
+  const disabled = !state.recording;
 
   return (
-    <>
-      <label className="field">
-        <span>Format</span>
-        <select
-          value={format}
-          disabled={!state.recording}
-          onChange={(e) => {
-            studio.setMixdown({ format: e.target.value as MixdownFormat });
-            studio.commit("Mixdown format");
-          }}
-        >
-          {FORMATS.map((f) => (
-            <option key={f.value} value={f.value} disabled={!supported.includes(f.value)}>
-              {f.label}
-              {supported.includes(f.value) ? "" : " — not available in this browser"}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="field">
-        <span>Loudness</span>
-        <select
-          value={loudness}
-          disabled={!state.recording}
-          onChange={(e) => {
-            studio.setMixdown({ loudness: Number(e.target.value) as MixdownLoudness });
-            studio.commit("Mixdown loudness");
-          }}
-        >
-          {LOUDNESS.map((l) => (
-            <option key={l.value} value={l.value}>{l.label}</option>
-          ))}
-        </select>
-      </label>
-      <button className="btn primary" disabled={disabled} onClick={() => void exporter.run()}>
-        {status.kind === "running" ? "Exporting…" : "Export Mixdown"}
+    <Section title="Mixdown" badge={format.toUpperCase()}>
+      <div className="field-label">Format</div>
+      <Segmented<MixdownFormat>
+        label="Format"
+        value={format}
+        disabled={disabled}
+        options={(["mp3", "wav", "aac"] as const).map((f) => ({
+          value: f,
+          label: f.toUpperCase(),
+          disabled: !supported.includes(f),
+          title: supported.includes(f) ? FORMAT_HINT[f] : "Not available in this browser",
+        }))}
+        onChange={(f) => {
+          studio.setMixdown({ format: f });
+          studio.commit("Mixdown format");
+        }}
+      />
+      <div className="hint-text">{FORMAT_HINT[format]}</div>
+      <div className="field-label">Loudness</div>
+      <Segmented<MixdownLoudness>
+        label="Loudness"
+        value={loudness}
+        disabled={disabled}
+        options={([-16, -14, -9] as const).map((l) => ({
+          value: l,
+          label: l === -14 ? "Streaming" : l === -16 ? "Quieter" : "Loud",
+          title: LOUDNESS_HINT[l],
+        }))}
+        onChange={(l) => {
+          studio.setMixdown({ loudness: l });
+          studio.commit("Mixdown loudness");
+        }}
+      />
+      <div className="hint-text">{LOUDNESS_HINT[loudness]}</div>
+      <button
+        className="btn primary wide"
+        disabled={disabled || status.kind === "running"}
+        onClick={() => void exporter.run()}
+      >
+        {status.kind === "running" ? `Exporting… ${Math.round(status.progress * 100)}%` : "Export Mixdown"}
       </button>
       {status.kind === "running" && (
         <div className="bar" role="progressbar" aria-valuenow={Math.round(status.progress * 100)} aria-valuemin={0} aria-valuemax={100}>
           <div style={{ width: `${status.progress * 100}%` }} />
         </div>
       )}
-      {status.kind === "done" && <div className="ok" role="status">Mixdown ready: {status.fileName}</div>}
+      {status.kind === "done" && <div className="ok" role="status">✓ Saved {status.fileName}</div>}
       {status.kind === "error" && <div className="error" role="alert">{status.message}</div>}
-      {!state.recording && <div className="dim">Import a Recording to export a Mixdown.</div>}
-    </>
+      {disabled && <div className="hint-text">Import a Recording to export a Mixdown.</div>}
+      {!disabled && state.separation.status !== "done" && (
+        <div className="hint-text">Tip: separate first to include Noise Reduction, Vocal Boost and Pitch Correction.</div>
+      )}
+    </Section>
   );
 }

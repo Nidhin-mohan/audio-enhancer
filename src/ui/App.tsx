@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chevron, Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon } from "./icons";
-import { KeyControl } from "./KeyControl";
-import { MixdownPanel, useMixdownExport } from "./MixdownPanel";
+import { Segmented } from "./controls";
+import { EffectsNotice, NoiseReductionSection, PitchCorrectionSection, VocalBoostSection } from "./EffectsPanel";
+import { Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon, VolumeIcon } from "./icons";
+import { MixdownSection, useMixdownExport } from "./MixdownPanel";
 import { RecordingLane } from "./RecordingLane";
+import { SeparationCard } from "./SeparationCard";
+import { StemLanes } from "./StemLanes";
 import { fmtClock, fmtShort, usePosition, useStudio } from "./useStudio";
 
 const PEAK_COUNT = 1200;
@@ -33,7 +36,8 @@ export function App() {
   const importFile = (file: File | undefined) => {
     if (!file) return;
     const { undo, redo } = studio.getState().history;
-    if (undo.length > 0 || redo.length > 0) setPendingFile(file);
+    const separated = studio.getState().separation.status === "done";
+    if (undo.length > 0 || redo.length > 0 || separated) setPendingFile(file);
     else void loadFile(file);
   };
 
@@ -98,27 +102,62 @@ export function App() {
     };
   });
 
-  // Space bar toggles play/pause (except while typing).
+  // Space toggles play/pause; B switches Original/Enhanced (not while typing or on a focused button).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || isTyping(e.target) || (e.target as HTMLElement).closest("select, button")) return;
-      e.preventDefault();
-      if (studio.getState().playing) studio.pause();
-      else void studio.play();
+      if (isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      const onControl = (e.target as HTMLElement).closest("select, button");
+      if (e.code === "Space" && !onControl) {
+        e.preventDefault();
+        if (studio.getState().playing) studio.pause();
+        else void studio.play();
+      } else if (e.key.toLowerCase() === "b" && studio.getState().recording) {
+        studio.setAB(studio.getState().transport.ab === "original" ? "processed" : "original");
+      }
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [studio]);
 
   const openPicker = () => fileInput.current?.click();
+  const reveal = (id: string) => {
+    setPanelOpen(true);
+    requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  const separated = state.separation.status === "done";
+  const separating = state.separation.status === "running";
+  const exported = exporter.status.kind === "done";
+
+  const steps: Step[] = [
+    { label: "Import", state: recording ? "done" : "current", onClick: openPicker },
+    {
+      label: "Separate",
+      state: separated ? "done" : recording ? "current" : "todo",
+      onClick: () => (recording && !separating && !separated ? void studio.separate() : reveal("main-top")),
+    },
+    { label: "Enhance", state: separated ? (exported ? "done" : "current") : "todo", onClick: () => reveal("effects") },
+    { label: "Export", state: exported ? "done" : separated ? "next" : "todo", onClick: () => reveal("mixdown") },
+  ];
 
   return (
     <div className="app">
-      <div className={`shell${panelOpen ? "" : " nopanel"}`}>
-        <nav className="rail" aria-label="Tools">
+      <header className="topbar">
+        <div className="brand">
+          <span className="logo" aria-hidden="true" />
+          Audio Enhancer
+        </div>
+        {recording && (
+          <div className="file">
+            <span className="file-name" title={recording.name}>{recording.name}</span>
+            <span className="muted num">{fmtShort(recording.durationSec)}</span>
+            <button className="btn small" onClick={openPicker}>Replace…</button>
+          </div>
+        )}
+        <Stepper steps={steps} />
+        <div className="history" role="group" aria-label="Undo and redo">
           <button
-            className="hist"
-            data-tip={undoTip("Undo", state.history.undo.at(-1), "Ctrl+Z")}
+            className="icon-btn"
+            title={undoTip("Undo", state.history.undo.at(-1), "Ctrl+Z")}
             aria-label="Undo"
             disabled={!state.history.undo.length}
             onClick={undo}
@@ -126,35 +165,51 @@ export function App() {
             ↶
           </button>
           <button
-            className="hist"
-            data-tip={undoTip("Redo", state.history.redo.at(-1), "Ctrl+Shift+Z")}
+            className="icon-btn"
+            title={undoTip("Redo", state.history.redo.at(-1), "Ctrl+Shift+Z")}
             aria-label="Redo"
             disabled={!state.history.redo.length}
             onClick={redo}
           >
             ↷
           </button>
-          <div className="rail-sep" />
+        </div>
+      </header>
+
+      <div className={`shell${panelOpen ? "" : " nopanel"}`}>
+        <nav className="rail" aria-label="Tools">
           <button data-tip="Import a Recording" aria-label="Import a Recording" onClick={openPicker}>
             <Icon name="import" />
           </button>
-          <button data-tip="Separate into Stems (coming soon)" aria-label="Separate" disabled>
+          <button
+            data-tip={!recording ? "Separate into Stems (import a Recording first)" : separated ? "Already separated" : "Separate into Stems"}
+            aria-label="Separate into Stems"
+            className={separating ? "on" : ""}
+            disabled={!recording || separated || separating}
+            onClick={() => void studio.separate()}
+          >
             <Icon name="separate" />
           </button>
-          <button data-tip="Mixer (coming soon)" aria-label="Mixer" disabled>
+          <button
+            data-tip={separated ? "Go to the Stem mixer" : "Stem mixer (after Separation)"}
+            aria-label="Stem mixer"
+            disabled={!separated}
+            onClick={() => document.getElementById("stems")?.scrollIntoView({ behavior: "smooth" })}
+          >
             <Icon name="mixer" />
           </button>
           <button
-            data-tip={panelOpen ? "Hide effects panel" : "Show effects panel"}
+            data-tip={panelOpen ? "Hide the effects panel" : "Show the effects panel"}
             aria-label="Toggle effects panel"
+            aria-pressed={panelOpen}
             className={panelOpen ? "on" : ""}
             onClick={() => setPanelOpen((o) => !o)}
           >
             <Icon name="effects" />
           </button>
           <button
-            data-tip="Export Mixdown"
-            aria-label="Export"
+            data-tip={recording ? "Export the Mixdown" : "Export (import a Recording first)"}
+            aria-label="Export Mixdown"
             disabled={!recording || exporter.status.kind === "running"}
             onClick={() => void exporter.run()}
           >
@@ -162,7 +217,7 @@ export function App() {
           </button>
         </nav>
 
-        <main className="main">
+        <main className="main" id="main-top">
           {error && (
             <div className="error" role="alert">
               {error}
@@ -171,11 +226,6 @@ export function App() {
           )}
           {recording ? (
             <>
-              <div className="mhead">
-                <span className="name">{recording.name}</span>
-                <span className="muted num">{fmtShort(recording.durationSec)}</span>
-                <button className="btn" onClick={openPicker}>Replace…</button>
-              </div>
               <RecordingLane
                 studio={studio}
                 peaks={peaks}
@@ -184,29 +234,35 @@ export function App() {
                 trim={state.mix.trim}
                 onGestureEnd={(handle) => studio.commit(HANDLE_LABELS[handle])}
               />
+              <SeparationCard studio={studio} state={state} />
+              <StemLanes studio={studio} state={state} position={position} />
             </>
           ) : (
             <button className="drop" onClick={openPicker}>
+              <Icon name="import" />
               <h2>Drop your Recording here</h2>
-              <div className="muted">or click to choose a file · M4A, MP3, WAV or OGG · stays on your computer</div>
+              <div className="muted">or click to choose a file · M4A, MP3, WAV or OGG</div>
+              <div className="dim">Everything stays on your computer.</div>
             </button>
           )}
         </main>
 
-        <aside className="panel" aria-label="Properties">
-          <div className="ph sc">Properties</div>
-          {["Noise Reduction", "Vocal Boost"].map((title) => (
-            <PanelSection key={title} title={title}>
-              <div className="dim">Coming soon.</div>
-            </PanelSection>
-          ))}
-          <PanelSection title="Pitch Correction">
-            <KeyControl studio={studio} state={state} />
-            <div className="dim">Presets and correction controls are coming soon.</div>
-          </PanelSection>
-          <PanelSection title="Mixdown">
-            <MixdownPanel studio={studio} state={state} exporter={exporter} />
-          </PanelSection>
+        <aside className="panel" aria-label="Effects and Mixdown">
+          <div className="ph" id="effects">
+            <span className="sc">Effects</span>
+            {state.processingVocals && (
+              <span className="updating" role="status">
+                <span className="spinner small" aria-hidden="true" /> Updating vocals…
+              </span>
+            )}
+          </div>
+          <EffectsNotice studio={studio} state={state} />
+          <NoiseReductionSection studio={studio} state={state} />
+          <VocalBoostSection studio={studio} state={state} />
+          <PitchCorrectionSection studio={studio} state={state} />
+          <div id="mixdown">
+            <MixdownSection studio={studio} state={state} exporter={exporter} />
+          </div>
         </aside>
       </div>
 
@@ -214,19 +270,21 @@ export function App() {
         <button
           className="tbtn play"
           aria-label={state.playing ? "Pause" : "Play"}
+          title={state.playing ? "Pause (Space)" : "Play (Space)"}
           disabled={!recording}
           onClick={() => (state.playing ? studio.pause() : void studio.play())}
         >
           {state.playing ? <PauseIcon /> : <PlayIcon />}
         </button>
-        <button className="tbtn" aria-label="Stop" disabled={!recording} onClick={() => studio.stop()}>
+        <button className="tbtn" aria-label="Stop" title="Stop and go back to the start" disabled={!recording} onClick={() => studio.stop()}>
           <StopIcon />
         </button>
         <button
           className={`tbtn${state.transport.loop ? " on" : ""}`}
           aria-label="Loop"
           aria-pressed={state.transport.loop}
-          title="Loop the trimmed range"
+          title="Loop the trimmed part"
+          disabled={!recording}
           onClick={() => studio.setLoop(!state.transport.loop)}
         >
           <LoopIcon />
@@ -234,15 +292,28 @@ export function App() {
         <span className="clock num" aria-label="Time">
           {fmtClock(position)} <span className="dim">/ {fmtClock(recording?.durationSec ?? 0)}</span>
         </span>
+        <div className="ab" title="Compare with the untouched Recording (B)">
+          <Segmented<"original" | "processed">
+            label="Compare"
+            value={state.transport.ab}
+            disabled={!recording}
+            options={[
+              { value: "original", label: "Original" },
+              { value: "processed", label: "Enhanced" },
+            ]}
+            onChange={(v) => studio.setAB(v)}
+          />
+        </div>
         <span className="grow" />
-        <label className="vol" title="Listening volume (only what you hear — doesn't change the Mixdown)">
-          <span className="sc">Vol</span>
+        <label className="vol" title="Listening volume — only what you hear, never the Mixdown">
+          <VolumeIcon />
           <input
             type="range"
             aria-label="Listening volume"
             min={0}
             max={100}
             value={Math.round(state.transport.listeningVolume * 100)}
+            style={{ "--fill": `${state.transport.listeningVolume * 100}%` } as React.CSSProperties}
             onChange={(e) => studio.setListeningVolume(Number(e.target.value) / 100)}
           />
         </label>
@@ -265,7 +336,7 @@ export function App() {
           <div className="modal">
             <h3 id="replace-title">Replace this Recording?</h3>
             <p className="muted">
-              Opening “{pendingFile.name}” discards your edits to “{recording?.name}”. This can't be undone.
+              Opening “{pendingFile.name}” discards your Stems and edits for “{recording?.name}”. This can't be undone.
             </p>
             <div className="modal-actions">
               <button className="btn" autoFocus onClick={() => setPendingFile(null)}>Keep editing</button>
@@ -284,6 +355,28 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+interface Step {
+  label: string;
+  state: "done" | "current" | "next" | "todo";
+  onClick: () => void;
+}
+
+/** Where you are in Import → Separate → Enhance → Export; each step jumps to its controls. */
+function Stepper({ steps }: { steps: Step[] }) {
+  return (
+    <ol className="stepper" aria-label="Steps">
+      {steps.map((s, i) => (
+        <li key={s.label} className={s.state}>
+          <button onClick={s.onClick} aria-current={s.state === "current" ? "step" : undefined}>
+            <span className="step-num" aria-hidden="true">{s.state === "done" ? "✓" : i + 1}</span>
+            {s.label}
+          </button>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -314,17 +407,3 @@ function useToast() {
     },
   };
 }
-
-function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <section className={`acc${open ? " open" : ""}`}>
-      <button className="acc-h" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <Chevron />
-        <span className="sc">{title}</span>
-      </button>
-      {open && <div className="acc-b">{children}</div>}
-    </section>
-  );
-}
-
