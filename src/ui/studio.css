@@ -74,6 +74,15 @@ button, input, select { font: inherit; color: inherit; }
 .modal { background: var(--s1); border: 1px solid var(--line2); border-radius: 12px; padding: 18px 20px; max-width: 420px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6); }
 .modal h3 { margin: 0 0 8px; font-size: 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.btn.primary { background: var(--accentD); border-color: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { box-shadow: var(--glow); }
+.field { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 8px; }
+.field > span { color: var(--muted); font-size: 12.5px; }
+select { background: var(--s2); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 6px; min-width: 0; }
+.bar { height: 6px; background: var(--s3); border-radius: 99px; overflow: hidden; }
+.bar > div { height: 100%; background: linear-gradient(90deg, var(--accentD), var(--accent)); box-shadow: 0 0 10px var(--accent); }
+.ok { color: #5fd39a; }
+.acc-b .error { margin: 0; }
 .btn.danger { background: #8a2e44; border-color: #c9486a; color: #fff; }
 .tbtn.on { color: var(--accent); box-shadow: var(--glow); }
 .vol { display: flex; align-items: center; gap: 6px; width: 190px; }

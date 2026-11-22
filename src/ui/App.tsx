@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Chevron, Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon } from "./icons";
+import { MixdownPanel, useMixdownExport } from "./MixdownPanel";
 import { RecordingLane } from "./RecordingLane";
 import { fmtClock, fmtShort, usePosition, useStudio } from "./useStudio";
 
@@ -17,6 +18,7 @@ export function App() {
   const peaks = useMemo(() => (recording ? studio.getPeaks(PEAK_COUNT) : []), [studio, recording]);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const toast = useToast();
+  const exporter = useMixdownExport(studio);
 
   const loadFile = async (file: File) => {
     try {
@@ -149,7 +151,12 @@ export function App() {
           >
             <Icon name="effects" />
           </button>
-          <button data-tip="Export Mixdown (coming soon)" aria-label="Export" disabled>
+          <button
+            data-tip="Export Mixdown"
+            aria-label="Export"
+            disabled={!recording || exporter.status.kind === "running"}
+            onClick={() => void exporter.run()}
+          >
             <Icon name="export" />
           </button>
         </nav>
@@ -187,11 +194,14 @@ export function App() {
 
         <aside className="panel" aria-label="Properties">
           <div className="ph sc">Properties</div>
-          {["Noise Reduction", "Vocal Boost", "Pitch Correction", "Mixdown"].map((title) => (
+          {["Noise Reduction", "Vocal Boost", "Pitch Correction"].map((title) => (
             <PanelSection key={title} title={title}>
               <div className="dim">Coming soon.</div>
             </PanelSection>
           ))}
+          <PanelSection title="Mixdown">
+            <MixdownPanel studio={studio} state={state} exporter={exporter} />
+          </PanelSection>
         </aside>
       </div>
 

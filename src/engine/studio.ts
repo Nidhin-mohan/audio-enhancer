@@ -1,10 +1,23 @@
 // The Studio engine: the single module the UI talks to.
 // It owns the Recording, the Mix, and playback (transport).
 
+import { aacSupported } from "./encoders";
 import { renderRecording, scheduleRecording, type Trim } from "./graph";
 import { createHistory, type HistoryLabels } from "./history";
+import { MIXDOWN_EXTENSION, type MixdownFormat, type MixdownLoudness } from "./mixdown";
+import type { MixdownWorkerMessage } from "./mixdown.worker";
 
-export type { HistoryLabels, Trim };
+export type { HistoryLabels, MixdownFormat, MixdownLoudness, Trim };
+
+export interface MixdownSettings {
+  format: MixdownFormat;
+  loudness: MixdownLoudness;
+}
+
+export interface MixdownFile {
+  blob: Blob;
+  fileName: string;
+}
 
 export interface RecordingInfo {
   name: string;
@@ -14,6 +27,7 @@ export interface RecordingInfo {
 /** The user's choices that decide how the Mixdown sounds. */
 export interface Mix {
   trim: Trim;
+  mixdown: MixdownSettings;
 }
 
 /** Listening controls: they never affect the Mixdown. */
@@ -58,6 +72,11 @@ export interface Studio {
   redo(): void;
   /** Render what the Mix sounds like over the Trim range (the basis of the Mixdown). */
   render(): Promise<AudioBuffer>;
+  setMixdown(patch: Partial<MixdownSettings>): void;
+  /** Formats this browser can export (AAC depends on built-in encoder support). */
+  supportedMixdownFormats(): Promise<MixdownFormat[]>;
+  /** Render, level and encode the Mixdown. Progress goes from 0 to 1. */
+  exportMixdown(onProgress?: (fraction: number) => void): Promise<MixdownFile>;
   getState(): StudioState;
   subscribe(listener: (state: StudioState) => void): () => void;
   dispose(): void;
@@ -111,7 +130,7 @@ export function createStudio(): Studio {
 
   let state: StudioState = {
     recording: null,
-    mix: { trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 } },
+    mix: { trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 }, mixdown: { format: "mp3", loudness: -14 } },
     transport: { loop: false, masterVolume: 0.8 },
     playing: false,
     cursor: 0,
@@ -270,6 +289,45 @@ export function createStudio(): Studio {
     async render() {
       if (!buffer) throw new Error("Import a Recording first.");
       return renderRecording(buffer, trim());
+    },
+    setMixdown(patch) {
+      setState({ mix: { ...state.mix, mixdown: { ...state.mix.mixdown, ...patch } } });
+    },
+    async supportedMixdownFormats() {
+      const formats: MixdownFormat[] = ["mp3", "wav"];
+      if (await aacSupported(buffer?.sampleRate ?? ctx.sampleRate)) formats.push("aac");
+      return formats;
+    },
+    async exportMixdown(onProgress) {
+      if (!buffer || !state.recording) throw new Error("Import a Recording first.");
+      const { format, loudness } = state.mix.mixdown;
+      const fileName = `${state.recording.name.replace(/\.[^.]+$/, "")}-enhanced.${MIXDOWN_EXTENSION[format]}`;
+      onProgress?.(0);
+      const rendered = await renderRecording(buffer, trim());
+      onProgress?.(0.1);
+      const channels = [rendered.getChannelData(0).slice(), rendered.getChannelData(1).slice()];
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        const worker = new Worker(new URL("./mixdown.worker.ts", import.meta.url), { type: "module" });
+        worker.onmessage = (e: MessageEvent<MixdownWorkerMessage>) => {
+          const m = e.data;
+          if (m.type === "progress") onProgress?.(0.1 + 0.9 * m.value);
+          else {
+            worker.terminate();
+            if (m.type === "done") resolve(m.blob);
+            else reject(new Error(`Export failed: ${m.message}`));
+          }
+        };
+        worker.onerror = (e) => {
+          worker.terminate();
+          reject(new Error(`Export failed: ${e.message}`));
+        };
+        worker.postMessage(
+          { channels, sampleRate: rendered.sampleRate, format, loudness },
+          channels.map((c) => c.buffer),
+        );
+      });
+      onProgress?.(1);
+      return { blob, fileName };
     },
     getState: () => state,
     subscribe(listener) {

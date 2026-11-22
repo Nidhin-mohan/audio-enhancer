@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: { include: ["@breezystack/lamejs", "mp4-muxer"] },
   test: {
     include: ["src/**/*.test.ts"],
     exclude: ["src/**/*.slow.test.ts"],
