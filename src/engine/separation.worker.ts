@@ -4,10 +4,10 @@
 
 import * as ort from "onnxruntime-web/webgpu";
 import { CONSTANTS, DemucsProcessor } from "demucs-web";
-import type { SeparatedStems, SeparationProgress } from "./separation";
+import { MODEL_CACHE_NAME, SEPARATION_MODEL_URL, type SeparatedStems, type SeparationProgress } from "./separation";
 
-const MODEL_URL = CONSTANTS.DEFAULT_MODEL_URL as string;
-const CACHE_NAME = "audio-enhancer-models-v1";
+const MODEL_URL = SEPARATION_MODEL_URL;
+const CACHE_NAME = MODEL_CACHE_NAME;
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 const phase = (progress: SeparationProgress) => scope.postMessage({ type: "phase", progress });

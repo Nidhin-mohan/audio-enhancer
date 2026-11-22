@@ -2,6 +2,19 @@
 // on the Separator signature, so tests can use a fast stand-in for the real model.
 
 export const STEM_NAMES = ["vocals", "drums", "bass", "other"] as const;
+
+/** The HTDemucs model (≈172 MB), downloaded once and kept in Cache Storage. */
+export const SEPARATION_MODEL_URL = "https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx";
+export const MODEL_CACHE_NAME = "audio-enhancer-models-v1";
+
+/** True when the Separation model is already on this computer (no download needed). */
+export async function isSeparationModelCached(): Promise<boolean> {
+  try {
+    return !!(await (await caches.open(MODEL_CACHE_NAME)).match(SEPARATION_MODEL_URL));
+  } catch {
+    return false;
+  }
+}
 export type StemName = (typeof STEM_NAMES)[number];
 
 export interface StereoAudio {
