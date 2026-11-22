@@ -28,6 +28,12 @@ export const LoopIcon = () => (
     <path d="M17 2l4 4-4 4V7H7a3 3 0 0 0-3 3v1H2v-1a5 5 0 0 1 5-5h10zM7 22l-4-4 4-4v3h10a3 3 0 0 0 3-3v-1h2v1a5 5 0 0 1-5 5H7z" />
   </svg>
 );
+export const VolumeIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="vol-icon">
+    <path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" />
+    <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+  </svg>
+);
 export const Chevron = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
 );
