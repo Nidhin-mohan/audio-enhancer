@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createStudio, type Studio } from "./studio";
-import { sine, wait, wavFile } from "../test/audio-fixtures";
+import { sine, wait, warmUp, wavFile } from "../test/audio-fixtures";
 
 let studio: Studio;
 afterEach(() => studio?.dispose());
@@ -9,6 +9,7 @@ afterEach(() => studio?.dispose());
 async function loadedDc(seconds: number) {
   studio = createStudio();
   await studio.load(wavFile([new Float32Array(Math.round(seconds * 44100)).fill(0.5)]));
+  await warmUp(studio);
   return studio;
 }
 const rms = (a: Float32Array, from: number, to: number) => {

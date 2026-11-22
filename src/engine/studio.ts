@@ -2,8 +2,9 @@
 // It owns the Recording, the Mix, and playback (transport).
 
 import { renderRecording, scheduleRecording, type Trim } from "./graph";
+import { createHistory, type HistoryLabels } from "./history";
 
-export type { Trim };
+export type { HistoryLabels, Trim };
 
 export interface RecordingInfo {
   name: string;
@@ -29,6 +30,8 @@ export interface StudioState {
   playing: boolean;
   /** Where playback last started or will resume from (seconds). Changes on seek/pause/stop, not every frame. */
   cursor: number;
+  /** Labels of the undo and redo steps, oldest first. */
+  history: HistoryLabels;
 }
 
 export interface Studio {
@@ -46,6 +49,13 @@ export interface Studio {
   setTrim(patch: Partial<Trim>): void;
   setLoop(on: boolean): void;
   setMasterVolume(volume: number): void;
+  /**
+   * End of a user gesture (handle release, slider change, click): records one undo
+   * step named `label` if the Mix changed since the last step.
+   */
+  commit(label: string): void;
+  undo(): void;
+  redo(): void;
   /** Render what the Mix sounds like over the Trim range (the basis of the Mixdown). */
   render(): Promise<AudioBuffer>;
   getState(): StudioState;
@@ -105,8 +115,10 @@ export function createStudio(): Studio {
     transport: { loop: false, masterVolume: 0.8 },
     playing: false,
     cursor: 0,
+    history: { undo: [], redo: [] },
   };
   master.gain.value = state.transport.masterVolume;
+  const history = createHistory<Mix>(state.mix);
   let buffer: AudioBuffer | null = null;
   const listeners = new Set<(s: StudioState) => void>();
 
@@ -167,6 +179,21 @@ export function createStudio(): Studio {
     startSource(at);
   };
 
+  /** Apply a new Mix and keep playback consistent with it. */
+  const applyMix = (mix: Mix, extra: Partial<StudioState> = {}) => {
+    setState({ mix, ...extra });
+    const t = mix.trim;
+    if (source) restartIfPlaying();
+    else if (offset < t.start || offset > t.end) {
+      offset = clamp(offset, t.start, t.end);
+      setState({ cursor: offset });
+    }
+  };
+
+  const restoreFromHistory = (mix: Mix | null) => {
+    if (mix) applyMix(mix, { history: history.labels() });
+  };
+
   return {
     async load(file) {
       let decoded: AudioBuffer;
@@ -178,11 +205,14 @@ export function createStudio(): Studio {
       stopSource();
       buffer = decoded;
       offset = 0;
+      const mix: Mix = { ...state.mix, trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 } };
+      history.reset(mix);
       setState({
         recording: { name: file.name, durationSec: decoded.duration },
-        mix: { ...state.mix, trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 } },
+        mix,
         playing: false,
         cursor: 0,
+        history: history.labels(),
       });
     },
     getPeaks(count) {
@@ -218,13 +248,16 @@ export function createStudio(): Studio {
     getPosition: position,
     setTrim(patch) {
       if (!buffer) return;
-      const next = constrainTrim(trim(), patch, buffer.duration);
-      setState({ mix: { ...state.mix, trim: next } });
-      if (source) restartIfPlaying();
-      else if (offset < next.start || offset > next.end) {
-        offset = clamp(offset, next.start, next.end);
-        setState({ cursor: offset });
-      }
+      applyMix({ ...state.mix, trim: constrainTrim(trim(), patch, buffer.duration) });
+    },
+    commit(label) {
+      if (history.commit(label, state.mix)) setState({ history: history.labels() });
+    },
+    undo() {
+      restoreFromHistory(history.undo(state.mix));
+    },
+    redo() {
+      restoreFromHistory(history.redo(state.mix));
     },
     setLoop(on) {
       setState({ transport: { ...state.transport, loop: on } });

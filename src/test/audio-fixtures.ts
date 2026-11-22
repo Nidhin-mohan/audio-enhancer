@@ -37,3 +37,22 @@ export function wavFile(channels: Float32Array[], sampleRate = 44100, name = "te
 }
 
 export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The audio device can take a moment to start (especially with tests running in
+ * parallel), and the playback clock only runs once it has. Play until the clock
+ * moves, then stop, so timing-based assertions measure playback, not device start-up.
+ */
+export async function warmUp(s: {
+  play(): Promise<void>;
+  stop(): void;
+  getPosition(): number;
+}) {
+  await s.play();
+  const startedAt = Date.now();
+  while (s.getPosition() === 0 || s.getPosition() < 0.005) {
+    if (Date.now() - startedAt > 5000) throw new Error("Audio clock never started");
+    await wait(10);
+  }
+  s.stop();
+}

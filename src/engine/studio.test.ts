@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createStudio, type Studio } from "./studio";
-import { sine, wait, wavFile } from "../test/audio-fixtures";
+import { sine, wait, warmUp, wavFile } from "../test/audio-fixtures";
 
 let studio: Studio;
 afterEach(() => studio?.dispose());
@@ -39,6 +39,7 @@ describe("playback", () => {
   async function loaded(seconds = 3) {
     studio = createStudio();
     await studio.load(wavFile([sine(220, seconds)]));
+    await warmUp(studio);
     return studio;
   }
 

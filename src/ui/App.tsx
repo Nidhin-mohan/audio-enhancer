@@ -15,9 +15,10 @@ export function App() {
   const { recording } = state;
 
   const peaks = useMemo(() => (recording ? studio.getPeaks(PEAK_COUNT) : []), [studio, recording]);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const toast = useToast();
 
-  const importFile = async (file: File | undefined) => {
-    if (!file) return;
+  const loadFile = async (file: File) => {
     try {
       await studio.load(file);
       setError(null);
@@ -25,6 +26,42 @@ export function App() {
       setError((e as Error).message);
     }
   };
+  /** Import, asking first if that would throw away edits to the current Mix. */
+  const importFile = (file: File | undefined) => {
+    if (!file) return;
+    if (studio.getState().history.undo.length > 0) setPendingFile(file);
+    else void loadFile(file);
+  };
+
+  const undo = () => {
+    const label = studio.getState().history.undo.at(-1);
+    if (!label) return;
+    studio.undo();
+    toast.show(`Undo: ${label}`);
+  };
+  const redo = () => {
+    const label = studio.getState().history.redo.at(-1);
+    if (!label) return;
+    studio.redo();
+    toast.show(`Redo: ${label}`);
+  };
+  const undoRef = useRef({ undo, redo });
+  undoRef.current = { undo, redo };
+
+  // Ctrl/Cmd+Z undoes; Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y redo. Ignored while typing.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if ((e.target as HTMLElement).closest("input[type=text], textarea, [contenteditable]")) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) undoRef.current.undo();
+      else if ((k === "z" && e.shiftKey) || k === "y") undoRef.current.redo();
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
 
   // Drag and drop anywhere on the Studio.
   useEffect(() => {
@@ -43,7 +80,7 @@ export function App() {
       e.preventDefault();
       depth = 0;
       setDragging(false);
-      void importFile(e.dataTransfer?.files[0]);
+      importFile(e.dataTransfer?.files[0]);
     };
     window.addEventListener("dragenter", enter);
     window.addEventListener("dragleave", leave);
@@ -76,6 +113,25 @@ export function App() {
     <div className="app">
       <div className={`shell${panelOpen ? "" : " nopanel"}`}>
         <nav className="rail" aria-label="Tools">
+          <button
+            className="hist"
+            data-tip={undoTip("Undo", state.history.undo.at(-1), "Ctrl+Z")}
+            aria-label="Undo"
+            disabled={!state.history.undo.length}
+            onClick={undo}
+          >
+            ↶
+          </button>
+          <button
+            className="hist"
+            data-tip={undoTip("Redo", state.history.redo.at(-1), "Ctrl+Shift+Z")}
+            aria-label="Redo"
+            disabled={!state.history.redo.length}
+            onClick={redo}
+          >
+            ↷
+          </button>
+          <div className="rail-sep" />
           <button data-tip="Import a Recording" aria-label="Import a Recording" onClick={openPicker}>
             <Icon name="import" />
           </button>
@@ -118,6 +174,7 @@ export function App() {
                 duration={recording.durationSec}
                 position={position}
                 trim={state.mix.trim}
+                onGestureEnd={(handle) => studio.commit(HANDLE_LABELS[handle])}
               />
             </>
           ) : (
@@ -182,13 +239,56 @@ export function App() {
         accept="audio/*"
         hidden
         onChange={(e) => {
-          void importFile(e.target.files?.[0]);
+          importFile(e.target.files?.[0]);
           e.target.value = "";
         }}
       />
       {dragging && <div className="dropping">Drop to import your Recording</div>}
+      {toast.text && <div className="toast" role="status">{toast.text}</div>}
+      {pendingFile && (
+        <div className="modal-back" role="dialog" aria-modal="true" aria-labelledby="replace-title">
+          <div className="modal">
+            <h3 id="replace-title">Replace this Recording?</h3>
+            <p className="muted">
+              Opening “{pendingFile.name}” discards your edits to “{recording?.name}”. This can't be undone.
+            </p>
+            <div className="modal-actions">
+              <button className="btn" autoFocus onClick={() => setPendingFile(null)}>Keep editing</button>
+              <button
+                className="btn danger"
+                onClick={() => {
+                  const f = pendingFile;
+                  setPendingFile(null);
+                  void loadFile(f);
+                }}
+              >
+                Replace
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+const HANDLE_LABELS = { start: "Trim start", end: "Trim end", fadeIn: "Fade in", fadeOut: "Fade out" } as const;
+
+const undoTip = (verb: string, label: string | undefined, keys: string) =>
+  label ? `${verb} ${label} (${keys})` : `Nothing to ${verb.toLowerCase()}`;
+
+/** A brief, quiet message (e.g. "Undo: Trim start"). */
+function useToast() {
+  const [text, setText] = useState<string | null>(null);
+  const timer = useRef<number>(0);
+  return {
+    text,
+    show(message: string) {
+      setText(message);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setText(null), 1400);
+    },
+  };
 }
 
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
