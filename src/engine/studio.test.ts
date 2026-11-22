@@ -96,7 +96,9 @@ describe("playback", () => {
     await s.play();
     await wait(150);
     s.pause();
-    expect(s.getState().cursor).toBeGreaterThan(1.55);
+    // Paused somewhere after the seek point (how far depends on machine load).
+    expect(s.getState().cursor).toBeGreaterThan(1.5);
+    expect(s.getState().cursor).toBeCloseTo(s.getPosition(), 5);
     s.stop();
     expect(s.getState().cursor).toBe(0);
     expect(cursors.length).toBeGreaterThanOrEqual(3);

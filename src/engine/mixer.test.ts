@@ -29,6 +29,10 @@ async function separated() {
   });
   await studio.load(wavFile([sine(440, 2, SR, 0.2)], SR));
   await studio.separate();
+  // These tests are about mixing; keep the vocal effects neutral (steady test tones read as hum).
+  studio.setNoiseReduction({ enabled: false });
+  studio.setVocalBoost({ db: 0 });
+  studio.commit("neutral vocals");
   return studio;
 }
 const mixed = async (s: Studio) => {
@@ -92,7 +96,7 @@ describe("Stem mixer", () => {
     s.commit("Vocals level");
     s.setStem("bass", { mute: true });
     s.commit("Bass mute");
-    expect(s.getState().history.undo).toEqual(["Vocals level", "Bass mute"]);
+    expect(s.getState().history.undo).toEqual(["neutral vocals", "Vocals level", "Bass mute"]);
     s.undo();
     s.undo();
     expect(s.getState().mix.stems.vocals.level).toBe(0);
@@ -108,7 +112,7 @@ describe("A/B", () => {
     s.setAB("original");
     s.commit("A/B");
     expect(s.getState().transport.ab).toBe("original");
-    expect(s.getState().history.undo).toEqual(["Vocals mute"]);
+    expect(s.getState().history.undo).toEqual(["neutral vocals", "Vocals mute"]);
     const { data, sr } = await mixed(s);
     expect(toneLevel(data, 440, sr)).toBeLessThan(0.001); // the Mixdown is always the Processed Mix
   });

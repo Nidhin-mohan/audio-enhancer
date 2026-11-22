@@ -5,6 +5,8 @@ import { aacSupported } from "./encoders";
 import { mixOffline, schedulePlayback, type Layer, type ScheduledPlayback, type Trim } from "./graph";
 import { createHistory, type HistoryLabels } from "./history";
 import type { DetectedKey, NoteName, Scale } from "./key";
+import { integratedLoudness } from "./loudness";
+import { vocalChainActive, type NoiseReductionSettings } from "./vocal-processing";
 import { MIXDOWN_EXTENSION, type MixdownFormat, type MixdownLoudness } from "./mixdown";
 import {
   STEM_NAMES,
@@ -38,6 +40,15 @@ export interface MixdownSettings {
   loudness: MixdownLoudness;
 }
 
+export type { NoiseReductionSettings };
+
+export interface VocalBoostSettings {
+  /** While true, `db` follows the suggested level worked out from the Stems. */
+  auto: boolean;
+  /** -12..+12 */
+  db: number;
+}
+
 export interface MixdownFile {
   blob: Blob;
   fileName: string;
@@ -52,6 +63,8 @@ export interface RecordingInfo {
 export interface Mix {
   trim: Trim;
   stems: Record<StemName, StemSettings>;
+  noiseReduction: NoiseReductionSettings;
+  vocalBoost: VocalBoostSettings;
   key: MixKey;
   mixdown: MixdownSettings;
 }
@@ -80,6 +93,8 @@ export interface StudioState {
   detectedKey: DetectedKey | null;
   keyDetection: KeyDetection;
   separation: SeparationState;
+  /** True while the vocals' effects (Noise Reduction, Pitch Correction) are being recalculated. */
+  processingVocals: boolean;
 }
 
 export interface StudioOptions {
@@ -103,6 +118,9 @@ export interface Studio {
   /** Change any part of the Trim; values are kept within the Recording and fades within the kept range. */
   setTrim(patch: Partial<Trim>): void;
   setStem(stem: StemName, patch: Partial<StemSettings>): void;
+  setNoiseReduction(patch: Partial<NoiseReductionSettings>): void;
+  /** A manual `db` turns Auto off; `{ auto: true }` goes back to the suggested level. */
+  setVocalBoost(patch: Partial<VocalBoostSettings>): void;
   setLoop(on: boolean): void;
   setListeningVolume(volume: number): void;
   setAB(mode: Transport["ab"]): void;
@@ -142,6 +160,8 @@ const DEFAULT_STEMS: Record<StemName, StemSettings> = {
   // Most background noise ends up in "other", so it starts a little lower.
   other: { level: -6, mute: false, solo: false },
 };
+const DEFAULT_NOISE_REDUCTION: NoiseReductionSettings = { enabled: true, amount: 60 };
+const DEFAULT_VOCAL_BOOST: VocalBoostSettings = { auto: true, db: 0 };
 const sameTrim = (a: Trim, b: Trim) =>
   a.start === b.start && a.end === b.end && a.fadeIn === b.fadeIn && a.fadeOut === b.fadeOut;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -213,6 +233,8 @@ export function createStudio(options: StudioOptions = {}): Studio {
     mix: {
       trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 },
       stems: DEFAULT_STEMS,
+      noiseReduction: DEFAULT_NOISE_REDUCTION,
+      vocalBoost: DEFAULT_VOCAL_BOOST,
       key: DEFAULT_KEY,
       mixdown: { format: "mp3", loudness: -14 },
     },
@@ -223,8 +245,14 @@ export function createStudio(options: StudioOptions = {}): Studio {
     detectedKey: null,
     keyDetection: "idle",
     separation: { status: "idle" },
+    processingVocals: false,
   };
   let loadToken = 0;
+  /** The vocals after their effects chain, for the settings in `key`. */
+  let processedVocals: { key: string; buffer: AudioBuffer } | null = null;
+  let vocalJob: { key: string; done: Promise<void>; worker: Worker } | null = null;
+  let vocalTimer = 0;
+  let suggestedBoostDb = 0;
   listeningGain.gain.value = state.transport.listeningVolume;
   const history = createHistory<Mix>(state.mix);
   let buffer: AudioBuffer | null = null;
@@ -243,11 +271,79 @@ export function createStudio(options: StudioOptions = {}): Studio {
   };
   const trim = () => state.mix.trim;
 
+  /** Linear gain per Stem layer, including Vocal Boost on the vocals. */
+  const layerGains = (mix: Mix) => {
+    const g = stemGains(mix.stems);
+    g.vocals *= dbToGain(mix.vocalBoost.db);
+    return g;
+  };
+
+  // ---- Vocal effects chain (Noise Reduction, Pitch Correction): recalculated in a worker ----
+  const vocalSettings = (mix: Mix) => ({ noiseReduction: mix.noiseReduction });
+  const vocalKey = (mix: Mix) => JSON.stringify(vocalSettings(mix));
+  /** The vocals buffer to play now: processed if ready for the current settings, otherwise the best available. */
+  const vocalsBuffer = (): AudioBuffer => {
+    if (!vocalChainActive(vocalSettings(state.mix))) return stems!.vocals;
+    return processedVocals?.buffer ?? stems!.vocals;
+  };
+  /** Make sure the processed vocals match the current settings (resolves when they do). */
+  const ensureVocals = (): Promise<void> => {
+    if (!stems) return Promise.resolve();
+    const settings = vocalSettings(state.mix);
+    const key = vocalKey(state.mix);
+    if (!vocalChainActive(settings) || processedVocals?.key === key) return Promise.resolve();
+    if (vocalJob?.key === key) return vocalJob.done;
+    vocalJob?.worker.terminate();
+    const raw = stems.vocals;
+    const channels = [raw.getChannelData(0).slice(), raw.getChannelData(1).slice()];
+    const worker = new Worker(new URL("./vocals.worker.ts", import.meta.url), { type: "module" });
+    const token = loadToken;
+    setState({ processingVocals: true });
+    const done = runWorker<Float32Array[]>(
+      worker,
+      { channels, sampleRate: raw.sampleRate, ...settings },
+      channels.map((c) => c.buffer),
+    ).then((out) => {
+      if (token !== loadToken || vocalJob?.key !== key) return;
+      const b = ctx.createBuffer(2, out[0].length, raw.sampleRate);
+      b.copyToChannel(out[0] as Float32Array<ArrayBuffer>, 0);
+      b.copyToChannel(out[1] as Float32Array<ArrayBuffer>, 1);
+      processedVocals = { key, buffer: b };
+      vocalJob = null;
+      setState({ processingVocals: false });
+      restartIfPlaying(); // hear the new vocals straight away
+    });
+    vocalJob = { key, done, worker };
+    return done;
+  };
+  /** Recalculate the vocals shortly after the last settings change (sliders move many times per second). */
+  const scheduleVocals = () => {
+    clearTimeout(vocalTimer);
+    vocalTimer = window.setTimeout(() => void ensureVocals(), 200);
+  };
+
   /** The Mix: the four Stems once separated, otherwise the Recording itself. */
   const layers = (): Layer[] => {
     if (!stems) return buffer ? [{ id: "recording", buffer, gain: 1 }] : [];
-    const gains = stemGains(state.mix.stems);
-    return STEM_NAMES.map((n) => ({ id: n, buffer: stems![n], gain: gains[n] }));
+    const gains = layerGains(state.mix);
+    return STEM_NAMES.map((n) => ({ id: n, buffer: n === "vocals" ? vocalsBuffer() : stems![n], gain: gains[n] }));
+  };
+
+  /** Vocal Boost that brings the vocals level with the rest of the Mix (never a cut). */
+  const suggestBoost = (s: Record<StemName, AudioBuffer>): number => {
+    const loud = (b: AudioBuffer) => integratedLoudness([b.getChannelData(0), b.getChannelData(1)], b.sampleRate);
+    const gains = stemGains(DEFAULT_STEMS);
+    const n = s.vocals.length;
+    const backing = [new Float32Array(n), new Float32Array(n)];
+    for (const name of ["drums", "bass", "other"] as const)
+      for (let c = 0; c < 2; c++) {
+        const d = s[name].getChannelData(c);
+        for (let i = 0; i < n; i++) backing[c][i] += d[i] * gains[name];
+      }
+    const vocals = loud(s.vocals);
+    const rest = integratedLoudness(backing, s.vocals.sampleRate);
+    if (!Number.isFinite(vocals) || !Number.isFinite(rest)) return 0;
+    return clamp(Math.round((rest - vocals) * 2) / 2, 0, 12);
   };
   /** What you hear: the Mix, or the untouched Recording while comparing (A/B "original"). */
   const listeningLayers = (): Layer[] =>
@@ -294,15 +390,17 @@ export function createStudio(options: StudioOptions = {}): Studio {
   /** Push the Mix's Stem gains into the playing graph without restarting. */
   const updateLiveGains = () => {
     if (!playback || !stems || state.transport.ab === "original") return;
-    const gains = stemGains(state.mix.stems);
+    const gains = layerGains(state.mix);
     for (const n of STEM_NAMES) playback.setGain(n, gains[n]);
   };
 
   /** Apply a new Mix and keep playback consistent with it (only a Trim change needs a restart). */
   const applyMix = (mix: Mix, extra: Partial<StudioState> = {}) => {
     const trimChanged = !sameTrim(mix.trim, state.mix.trim);
+    const vocalsChanged = vocalKey(mix) !== vocalKey(state.mix);
     setState({ mix, ...extra });
     updateLiveGains();
+    if (vocalsChanged) scheduleVocals();
     if (!trimChanged) return;
     const t = mix.trim;
     if (playback) restartIfPlaying();
@@ -312,8 +410,9 @@ export function createStudio(options: StudioOptions = {}): Studio {
     }
   };
 
-  const mixAudio = () => {
+  const mixAudio = async () => {
     if (!buffer) throw new Error("Import a Recording first.");
+    await ensureVocals();
     const sampleRate = stems ? stems.vocals.sampleRate : buffer.sampleRate;
     return mixOffline(layers(), trim(), sampleRate);
   };
@@ -363,6 +462,9 @@ export function createStudio(options: StudioOptions = {}): Studio {
       }
       separationAbort?.abort();
       stopPlayback();
+      vocalJob?.worker.terminate();
+      vocalJob = null;
+      processedVocals = null;
       buffer = decoded;
       stems = null;
       offset = 0;
@@ -370,6 +472,8 @@ export function createStudio(options: StudioOptions = {}): Studio {
         ...state.mix,
         trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 },
         stems: DEFAULT_STEMS,
+        noiseReduction: DEFAULT_NOISE_REDUCTION,
+        vocalBoost: DEFAULT_VOCAL_BOOST,
         key: DEFAULT_KEY,
       };
       history.reset(mix);
@@ -382,6 +486,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
         detectedKey: null,
         keyDetection: "detecting",
         separation: { status: "idle" },
+        processingVocals: false,
       });
       detectKeyInBackground(decoded, ++loadToken);
     },
@@ -428,6 +533,20 @@ export function createStudio(options: StudioOptions = {}): Studio {
       s.level = clamp(s.level, -24, 12);
       applyMix({ ...state.mix, stems: { ...state.mix.stems, [stem]: s } });
     },
+    setNoiseReduction(patch) {
+      const nr = { ...state.mix.noiseReduction, ...patch };
+      nr.amount = clamp(Math.round(nr.amount), 0, 100);
+      applyMix({ ...state.mix, noiseReduction: nr });
+    },
+    setVocalBoost(patch) {
+      const vb: VocalBoostSettings =
+        patch.auto === true
+          ? { auto: true, db: suggestedBoostDb }
+          : patch.db !== undefined
+            ? { auto: false, db: clamp(patch.db, -12, 12) }
+            : { ...state.mix.vocalBoost, ...patch };
+      applyMix({ ...state.mix, vocalBoost: vb });
+    },
     commit(label) {
       if (history.commit(label, state.mix)) setState({ history: history.labels() });
     },
@@ -464,8 +583,13 @@ export function createStudio(options: StudioOptions = {}): Studio {
         );
         if (abort.signal.aborted || token !== loadToken) return;
         stems = toBuffers(separated);
-        setState({ separation: { status: "done" } });
+        suggestedBoostDb = suggestBoost(stems);
+        const adopt = (mix: Mix): Mix =>
+          mix.vocalBoost.auto ? { ...mix, vocalBoost: { auto: true, db: suggestedBoostDb } } : mix;
+        history.rewrite(adopt);
+        setState({ separation: { status: "done" }, mix: adopt(state.mix), history: history.labels() });
         restartIfPlaying(); // switch what's playing to the Stems
+        void ensureVocals(); // apply the default vocal effects
       } catch (e) {
         if (token !== loadToken) return;
         if (abort.signal.aborted || (e instanceof DOMException && e.name === "AbortError")) {
@@ -540,6 +664,8 @@ export function createStudio(options: StudioOptions = {}): Studio {
     },
     dispose() {
       separationAbort?.abort();
+      clearTimeout(vocalTimer);
+      vocalJob?.worker.terminate();
       stopPlayback();
       listeners.clear();
       void ctx.close();

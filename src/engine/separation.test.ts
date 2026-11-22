@@ -95,7 +95,9 @@ describe("Separation", () => {
   it("after Separation, the Mix is made from the Stems", async () => {
     const s = await loaded(fakeSeparator());
     await s.separate();
-    s.setStem("other", { level: 0 }); // the default -6 dB doesn't matter here: "other" is silent
+    // Neutral vocal effects, so the Stems add up exactly ("other" is silent, so its -6 dB doesn't matter).
+    s.setNoiseReduction({ enabled: false });
+    s.setVocalBoost({ db: 0 });
     const mixed = (await s.mixAudio()).getChannelData(0);
     // vocals + bass = the original Recording
     expect(rms(mixed)).toBeCloseTo(rms(recording), 2);

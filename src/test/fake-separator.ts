@@ -1,12 +1,15 @@
-import type { Separator, StereoAudio } from "../engine/separation";
+import type { Separator, StemName, StereoAudio } from "../engine/separation";
 import { sine } from "./audio-fixtures";
+
+/** A Stem's content: a plain tone, or any signal generated at the requested length and rate. */
+export type FakeStem = { freq: number; amp: number } | ((length: number, sampleRate: number) => Float32Array);
 
 /**
  * Fast stand-in for the real model. The "Recording" it pretends to separate is
- * defined by the tones given here; each Stem is built at the input's sample rate.
+ * defined by the Stems given here; each Stem is built at the input's sample rate.
  */
 export function fakeSeparator(
-  tones: Partial<Record<"vocals" | "drums" | "bass" | "other", { freq: number; amp: number }>>,
+  stems: Partial<Record<StemName, FakeStem>>,
   opts: { delayMs?: number; fail?: string } = {},
 ): Separator {
   return async (input, onProgress, signal) => {
@@ -18,12 +21,25 @@ export function fakeSeparator(
     if (opts.fail) throw new Error(opts.fail);
     const n = input.left.length;
     const sr = input.sampleRate;
-    const stem = (name: keyof typeof tones): StereoAudio => {
-      const t = tones[name];
-      if (!t) return { left: new Float32Array(n), right: new Float32Array(n) };
-      const s = sine(t.freq, n / sr, sr, t.amp);
+    const make = (name: StemName): StereoAudio => {
+      const def = stems[name];
+      if (!def) return { left: new Float32Array(n), right: new Float32Array(n) };
+      const s = typeof def === "function" ? def(n, sr) : sine(def.freq, n / sr, sr, def.amp);
       return { left: s, right: s.slice() };
     };
-    return { sampleRate: sr, vocals: stem("vocals"), drums: stem("drums"), bass: stem("bass"), other: stem("other") };
+    return { sampleRate: sr, vocals: make("vocals"), drums: make("drums"), bass: make("bass"), other: make("other") };
   };
+}
+
+/** Deterministic white noise. */
+export function noise(length: number, amp: number, seed = 1): Float32Array {
+  let x = seed >>> 0 || 1;
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    out[i] = amp * (((x >>> 0) / 4294967296) * 2 - 1);
+  }
+  return out;
 }
