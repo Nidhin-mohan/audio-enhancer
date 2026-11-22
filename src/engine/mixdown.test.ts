@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createStudio, type MixdownFormat, type Studio } from "./studio";
-import { integratedLoudness, samplePeak } from "./loudness";
+import { integratedLoudness, samplePeak, truePeak } from "./loudness";
 import { sine, wavFile } from "../test/audio-fixtures";
 
 let studio: Studio;
@@ -60,9 +60,19 @@ describe("exporting the Mixdown", () => {
       const out = await decode((await s.exportMixdown()).blob);
       const ch = channelsOf(out);
       expect(Math.abs(integratedLoudness(ch, out.sampleRate) - loudness)).toBeLessThanOrEqual(1);
-      expect(samplePeak(ch)).toBeLessThanOrEqual(Math.pow(10, -1 / 20) + 0.001); // -1 dBFS ceiling
+      expect(truePeak(ch, out.sampleRate)).toBeLessThanOrEqual(Math.pow(10, -1 / 20) + 0.005); // -1 dBTP ceiling
     });
   }
+
+  it("a loud, peaky Recording levelled to -9 LUFS still doesn't clip after MP3 encoding", async () => {
+    // Bright square-ish wave: lots of inter-sample peaks and encoder overshoot.
+    const sr = 44100;
+    const peaky = Float32Array.from({ length: sr * 6 }, (_, i) => 0.3 * Math.sign(Math.sin((2 * Math.PI * 1100 * i) / sr)));
+    const s = await loaded(peaky);
+    s.setMixdown({ format: "mp3", loudness: -9 });
+    const out = await decode((await s.exportMixdown()).blob);
+    expect(samplePeak(channelsOf(out))).toBeLessThan(Math.pow(10, -0.3 / 20));
+  });
 
   it("covers exactly the Trim range", async () => {
     const s = await loaded();

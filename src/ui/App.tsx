@@ -32,7 +32,8 @@ export function App() {
   /** Import, asking first if that would throw away edits to the current Mix. */
   const importFile = (file: File | undefined) => {
     if (!file) return;
-    if (studio.getState().history.undo.length > 0) setPendingFile(file);
+    const { undo, redo } = studio.getState().history;
+    if (undo.length > 0 || redo.length > 0) setPendingFile(file);
     else void loadFile(file);
   };
 
@@ -55,7 +56,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      if ((e.target as HTMLElement).closest("input[type=text], textarea, [contenteditable]")) return;
+      if (isTyping(e.target)) return;
       const k = e.key.toLowerCase();
       if (k === "z" && !e.shiftKey) undoRef.current.undo();
       else if ((k === "z" && e.shiftKey) || k === "y") undoRef.current.redo();
@@ -100,8 +101,7 @@ export function App() {
   // Space bar toggles play/pause (except while typing).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (e.code !== "Space" || t.closest("input, textarea, select, [contenteditable]")) return;
+      if (e.code !== "Space" || isTyping(e.target) || (e.target as HTMLElement).closest("select, button")) return;
       e.preventDefault();
       if (studio.getState().playing) studio.pause();
       else void studio.play();
@@ -235,15 +235,15 @@ export function App() {
           {fmtClock(position)} <span className="dim">/ {fmtClock(recording?.durationSec ?? 0)}</span>
         </span>
         <span className="grow" />
-        <label className="vol" title="Master volume (listening only — doesn't change the Mixdown)">
+        <label className="vol" title="Listening volume (only what you hear — doesn't change the Mixdown)">
           <span className="sc">Vol</span>
           <input
             type="range"
-            aria-label="Master volume"
+            aria-label="Listening volume"
             min={0}
             max={100}
-            value={Math.round(state.transport.masterVolume * 100)}
-            onChange={(e) => studio.setMasterVolume(Number(e.target.value) / 100)}
+            value={Math.round(state.transport.listeningVolume * 100)}
+            onChange={(e) => studio.setListeningVolume(Number(e.target.value) / 100)}
           />
         </label>
       </footer>
@@ -285,6 +285,15 @@ export function App() {
       )}
     </div>
   );
+}
+
+/** True while the user is typing text, where keyboard shortcuts must not fire. */
+const NON_TEXT_INPUTS = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "file", "color"]);
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el?.closest) return false;
+  if (el.closest("textarea, [contenteditable]:not([contenteditable=false])")) return true;
+  return el instanceof HTMLInputElement && !NON_TEXT_INPUTS.has(el.type);
 }
 
 const HANDLE_LABELS = { start: "Trim start", end: "Trim end", fadeIn: "Fade in", fadeOut: "Fade out" } as const;

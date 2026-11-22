@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { integratedLoudness, samplePeak } from "./loudness";
+import { integratedLoudness, samplePeak, truePeak } from "./loudness";
 import { sine } from "../test/audio-fixtures";
 
 // Reference values from EBU Tech 3341 (loudness metering test signals),
@@ -32,6 +32,13 @@ describe("integrated loudness (ITU-R BS.1770)", () => {
   it("returns -Infinity for pure silence", () => {
     const z = new Float32Array(48000 * 2);
     expect(integratedLoudness([z, z], 48000)).toBe(-Infinity);
+  });
+
+  it("true peak finds the peak between samples (a sine at fs/4, 45° phase, samples at 0.707)", () => {
+    const sr = 48000;
+    const s = Float32Array.from({ length: 4800 }, (_, i) => Math.sin((2 * Math.PI * i) / 4 + Math.PI / 4));
+    expect(samplePeak([s])).toBeCloseTo(0.7071, 3);
+    expect(Math.abs(truePeak([s], sr) - 1)).toBeLessThan(0.03);
   });
 
   it("sample peak is the largest absolute sample over all channels", () => {

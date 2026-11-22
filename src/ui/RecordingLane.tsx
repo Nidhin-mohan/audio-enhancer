@@ -35,8 +35,9 @@ export function RecordingLane({ studio, peaks, duration, position, trim, onGestu
     const move = (ev: PointerEvent) => {
       const t = timeAt(ev.clientX);
       const cur = studio.getState().mix.trim;
-      if (handle === "start") studio.setTrim({ start: Math.min(t, cur.end - 0.05) });
-      else if (handle === "end") studio.setTrim({ end: Math.max(t, cur.start + 0.05) });
+      // The engine keeps the Trim valid (minimum length, fades within the kept range).
+      if (handle === "start") studio.setTrim({ start: t });
+      else if (handle === "end") studio.setTrim({ end: t });
       else if (handle === "fadeIn") studio.setTrim({ fadeIn: Math.max(0, t - cur.start) });
       else studio.setTrim({ fadeOut: Math.max(0, cur.end - t) });
     };

@@ -60,7 +60,7 @@ describe("undo and redo", () => {
   it("listening controls never become undo steps", async () => {
     const s = await loaded();
     s.setLoop(true);
-    s.setMasterVolume(0.3);
+    s.setListeningVolume(0.3);
     s.seek(1);
     s.commit("Loop");
     expect(labels(s).undo).toEqual([]);

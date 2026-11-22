@@ -2,11 +2,11 @@
 // It owns the Recording, the Mix, and playback (transport).
 
 import { aacSupported } from "./encoders";
-import { renderRecording, scheduleRecording, type Trim } from "./graph";
+import { mixOffline, scheduleRecording, type Trim } from "./graph";
 import { createHistory, type HistoryLabels } from "./history";
 import type { DetectedKey, NoteName, Scale } from "./key";
 import { MIXDOWN_EXTENSION, type MixdownFormat, type MixdownLoudness } from "./mixdown";
-import type { MixdownWorkerMessage } from "./mixdown.worker";
+import { runWorker } from "./workers";
 
 export type { DetectedKey, HistoryLabels, MixdownFormat, MixdownLoudness, NoteName, Scale, Trim };
 
@@ -43,8 +43,10 @@ export interface Mix {
 export interface Transport {
   loop: boolean;
   /** 0..1 */
-  masterVolume: number;
+  listeningVolume: number;
 }
+
+export type KeyDetection = "idle" | "detecting" | "found" | "not-found";
 
 export interface StudioState {
   recording: RecordingInfo | null;
@@ -57,6 +59,7 @@ export interface StudioState {
   history: HistoryLabels;
   /** The Recording's Key as detected; null until detection finishes (or if it found no tonal content). */
   detectedKey: DetectedKey | null;
+  keyDetection: KeyDetection;
 }
 
 export interface Studio {
@@ -73,7 +76,7 @@ export interface Studio {
   /** Change any part of the Trim; values are kept within the Recording and fades within the kept range. */
   setTrim(patch: Partial<Trim>): void;
   setLoop(on: boolean): void;
-  setMasterVolume(volume: number): void;
+  setListeningVolume(volume: number): void;
   /**
    * End of a user gesture (handle release, slider change, click): records one undo
    * step named `label` if the Mix changed since the last step.
@@ -81,8 +84,8 @@ export interface Studio {
   commit(label: string): void;
   undo(): void;
   redo(): void;
-  /** Render what the Mix sounds like over the Trim range (the basis of the Mixdown). */
-  render(): Promise<AudioBuffer>;
+  /** The Mix as stereo audio over the Trim range, before loudness levelling (what the Mixdown is made from). */
+  mixAudio(): Promise<AudioBuffer>;
   /** Override the Key (root and/or scale). */
   setKey(patch: Partial<Pick<MixKey, "root" | "scale">>): void;
   /** Go back to following the detected Key. */
@@ -90,7 +93,7 @@ export interface Studio {
   setMixdown(patch: Partial<MixdownSettings>): void;
   /** Formats this browser can export (AAC depends on built-in encoder support). */
   supportedMixdownFormats(): Promise<MixdownFormat[]>;
-  /** Render, level and encode the Mixdown. Progress goes from 0 to 1. */
+  /** Mix, level and encode the Mixdown. Progress goes from 0 to 1. */
   exportMixdown(onProgress?: (fraction: number) => void): Promise<MixdownFile>;
   getState(): StudioState;
   subscribe(listener: (state: StudioState) => void): () => void;
@@ -98,6 +101,10 @@ export interface Studio {
 }
 
 const MIN_KEPT_SEC = 0.05;
+/** Placeholder until the Key is detected; replaced as soon as detection finds one. */
+const DEFAULT_KEY: MixKey = { root: "C", scale: "major", detected: true };
+const sameTrim = (a: Trim, b: Trim) =>
+  a.start === b.start && a.end === b.end && a.fadeIn === b.fadeIn && a.fadeOut === b.fadeOut;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 function peaksOf(buffer: AudioBuffer, count: number): number[] {
@@ -140,24 +147,25 @@ function constrainTrim(current: Trim, patch: Partial<Trim>, duration: number): T
 
 export function createStudio(): Studio {
   const ctx = new AudioContext();
-  const master = ctx.createGain();
-  master.connect(ctx.destination);
+  const listeningGain = ctx.createGain();
+  listeningGain.connect(ctx.destination);
 
   let state: StudioState = {
     recording: null,
     mix: {
       trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 },
-      key: { root: "C", scale: "major", detected: true },
+      key: DEFAULT_KEY,
       mixdown: { format: "mp3", loudness: -14 },
     },
-    transport: { loop: false, masterVolume: 0.8 },
+    transport: { loop: false, listeningVolume: 0.8 },
     playing: false,
     cursor: 0,
     history: { undo: [], redo: [] },
     detectedKey: null,
+    keyDetection: "idle",
   };
   let loadToken = 0;
-  master.gain.value = state.transport.masterVolume;
+  listeningGain.gain.value = state.transport.listeningVolume;
   const history = createHistory<Mix>(state.mix);
   let buffer: AudioBuffer | null = null;
   const listeners = new Set<(s: StudioState) => void>();
@@ -194,7 +202,7 @@ export function createStudio(): Studio {
 
   const startSource = (from: number) => {
     if (!buffer) return;
-    const s = scheduleRecording(ctx, master, buffer, trim(), from);
+    const s = scheduleRecording(ctx, listeningGain, buffer, trim(), from);
     s.onended = () => {
       if (source !== s) return; // stopped on purpose
       source = null;
@@ -219,15 +227,22 @@ export function createStudio(): Studio {
     startSource(at);
   };
 
-  /** Apply a new Mix and keep playback consistent with it. */
+  /** Apply a new Mix and keep playback consistent with it (only a Trim change needs a restart). */
   const applyMix = (mix: Mix, extra: Partial<StudioState> = {}) => {
+    const trimChanged = !sameTrim(mix.trim, state.mix.trim);
     setState({ mix, ...extra });
+    if (!trimChanged) return;
     const t = mix.trim;
     if (source) restartIfPlaying();
     else if (offset < t.start || offset > t.end) {
       offset = clamp(offset, t.start, t.end);
       setState({ cursor: offset });
     }
+  };
+
+  const mixAudio = () => {
+    if (!buffer) throw new Error("Import a Recording first.");
+    return mixOffline(buffer, trim());
   };
 
   const restoreFromHistory = (mix: Mix | null) => {
@@ -242,16 +257,15 @@ export function createStudio(): Studio {
       for (let i = 0; i < mono.length; i++) mono[i] += data[i] / decoded.numberOfChannels;
     }
     const worker = new Worker(new URL("./key.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = (e: MessageEvent<DetectedKey | null>) => {
-      worker.terminate();
-      if (token !== loadToken || !e.data) return; // a newer Recording was loaded meanwhile
-      const found = e.data;
-      const adopt = (mix: Mix): Mix => (mix.key.detected ? { ...mix, key: { ...found, detected: true } } : mix);
-      history.rewrite(adopt);
-      setState({ detectedKey: found, mix: adopt(state.mix), history: history.labels() });
-    };
-    worker.onerror = () => worker.terminate();
-    worker.postMessage({ mono, sampleRate: decoded.sampleRate }, [mono.buffer]);
+    runWorker<DetectedKey | null>(worker, { mono, sampleRate: decoded.sampleRate }, [mono.buffer])
+      .catch(() => null)
+      .then((found) => {
+        if (token !== loadToken) return; // a newer Recording was loaded meanwhile
+        if (!found) return setState({ keyDetection: "not-found" });
+        const adopt = (mix: Mix): Mix => (mix.key.detected ? { ...mix, key: { ...found, detected: true } } : mix);
+        history.rewrite(adopt);
+        setState({ detectedKey: found, keyDetection: "found", mix: adopt(state.mix), history: history.labels() });
+      });
   };
 
   return {
@@ -268,7 +282,7 @@ export function createStudio(): Studio {
       const mix: Mix = {
         ...state.mix,
         trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 },
-        key: { root: "C", scale: "major", detected: true },
+        key: DEFAULT_KEY,
       };
       history.reset(mix);
       setState({
@@ -278,6 +292,7 @@ export function createStudio(): Studio {
         cursor: 0,
         history: history.labels(),
         detectedKey: null,
+        keyDetection: "detecting",
       });
       detectKeyInBackground(decoded, ++loadToken);
     },
@@ -328,14 +343,13 @@ export function createStudio(): Studio {
     setLoop(on) {
       setState({ transport: { ...state.transport, loop: on } });
     },
-    setMasterVolume(volume) {
+    setListeningVolume(volume) {
       const v = clamp(volume, 0, 1);
-      master.gain.setTargetAtTime(v, ctx.currentTime, 0.01);
-      setState({ transport: { ...state.transport, masterVolume: v } });
+      listeningGain.gain.setTargetAtTime(v, ctx.currentTime, 0.01);
+      setState({ transport: { ...state.transport, listeningVolume: v } });
     },
-    async render() {
-      if (!buffer) throw new Error("Import a Recording first.");
-      return renderRecording(buffer, trim());
+    async mixAudio() {
+      return mixAudio();
     },
     setKey(patch) {
       setState({ mix: { ...state.mix, key: { ...state.mix.key, ...patch, detected: false } } });
@@ -358,28 +372,17 @@ export function createStudio(): Studio {
       const { format, loudness } = state.mix.mixdown;
       const fileName = `${state.recording.name.replace(/\.[^.]+$/, "")}-enhanced.${MIXDOWN_EXTENSION[format]}`;
       onProgress?.(0);
-      const rendered = await renderRecording(buffer, trim());
+      const mixed = await mixAudio();
       onProgress?.(0.1);
-      const channels = [rendered.getChannelData(0).slice(), rendered.getChannelData(1).slice()];
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        const worker = new Worker(new URL("./mixdown.worker.ts", import.meta.url), { type: "module" });
-        worker.onmessage = (e: MessageEvent<MixdownWorkerMessage>) => {
-          const m = e.data;
-          if (m.type === "progress") onProgress?.(0.1 + 0.9 * m.value);
-          else {
-            worker.terminate();
-            if (m.type === "done") resolve(m.blob);
-            else reject(new Error(`Export failed: ${m.message}`));
-          }
-        };
-        worker.onerror = (e) => {
-          worker.terminate();
-          reject(new Error(`Export failed: ${e.message}`));
-        };
-        worker.postMessage(
-          { channels, sampleRate: rendered.sampleRate, format, loudness },
-          channels.map((c) => c.buffer),
-        );
+      const channels = [mixed.getChannelData(0).slice(), mixed.getChannelData(1).slice()];
+      const worker = new Worker(new URL("./mixdown.worker.ts", import.meta.url), { type: "module" });
+      const blob = await runWorker<Blob>(
+        worker,
+        { channels, sampleRate: mixed.sampleRate, format, loudness },
+        channels.map((c) => c.buffer),
+        (p) => onProgress?.(0.1 + 0.9 * p),
+      ).catch((e: Error) => {
+        throw new Error(`Export failed: ${e.message}`);
       });
       onProgress?.(1);
       return { blob, fileName };

@@ -39,12 +39,19 @@ _Avoid_: profile, mode
 The start and end points of the Recording that are kept; everything outside is left out of the Mixdown. Set by dragging directly on the Recording's waveform.
 _Avoid_: cut, crop
 
+**Fade**:
+A gradual rise from silence at the start of the Trim (fade in) or fall to silence at its end (fade out). Set by dragging handles on the Recording's waveform.
+
 **Mix**:
-The user's chosen balance of Stems (level, mute, solo per Stem) plus Noise Reduction, Vocal Boost and Pitch Correction settings. It decides how the Mixdown sounds.
+Every choice the user makes that decides how the Mixdown sounds: the Trim and Fades, the balance of Stems (level, mute, solo per Stem), the Noise Reduction, Vocal Boost and Pitch Correction settings (including the Key), and the Mixdown's format and loudness. Every change to the Mix can be undone.
 _Avoid_: preset, project
 
+**Listening volume**:
+How loud the user hears playback while working. Not part of the Mix; it never changes the Mixdown.
+_Avoid_: master volume
+
 **Mixdown**:
-The single enhanced audio file produced from a Mix, ready to share on any platform.
+The single enhanced audio file produced from a Mix, levelled to a standard loudness and ready to share on any platform. ("Enhanced" here means the whole result, as in the app's name, not Noise Reduction alone.)
 _Avoid_: output, master, render, bounce
 
 ## Flagged ambiguities

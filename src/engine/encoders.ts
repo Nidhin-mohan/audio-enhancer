@@ -5,12 +5,15 @@ import { ArrayBufferTarget, Muxer } from "mp4-muxer";
 
 export type Progress = (fraction: number) => void;
 
+/** Float sample (-1..1) to 16-bit PCM, clipping out-of-range values. */
+const pcm16 = (v: number) => {
+  const s = Math.max(-1, Math.min(1, v));
+  return s < 0 ? s * 0x8000 : s * 0x7fff;
+};
+
 const toInt16 = (c: Float32Array, from: number, to: number) => {
   const out = new Int16Array(to - from);
-  for (let i = from; i < to; i++) {
-    const s = Math.max(-1, Math.min(1, c[i]));
-    out[i - from] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
+  for (let i = from; i < to; i++) out[i - from] = pcm16(c[i]);
   return out;
 };
 
@@ -34,11 +37,7 @@ export function encodeWav(channels: Float32Array[], sampleRate: number): Blob {
   str(36, "data");
   v.setUint32(40, n * nc * 2, true);
   const pcm = new Int16Array(buf, 44);
-  for (let i = 0, o = 0; i < n; i++)
-    for (let c = 0; c < nc; c++) {
-      const s = Math.max(-1, Math.min(1, channels[c][i]));
-      pcm[o++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
+  for (let i = 0, o = 0; i < n; i++) for (let c = 0; c < nc; c++) pcm[o++] = pcm16(channels[c][i]);
   return new Blob([buf], { type: "audio/wav" });
 }
 

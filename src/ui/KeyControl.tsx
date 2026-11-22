@@ -8,7 +8,6 @@ export function KeyControl({ studio, state }: { studio: Studio; state: StudioSta
   const { key } = state.mix;
   const found = state.detectedKey;
   const disabled = !state.recording;
-  const detecting = !!state.recording && !found;
 
   return (
     <div className="key-ctl">
@@ -46,13 +45,15 @@ export function KeyControl({ studio, state }: { studio: Studio; state: StudioSta
       <div className="dim key-note" aria-live="polite">
         {disabled
           ? "Detected from your Recording once it's imported."
-          : detecting
+          : state.keyDetection === "detecting"
             ? "Detecting the Key…"
-            : key.detected
-              ? `${found!.root} ${found!.scale} (detected)`
-              : (
+            : !found
+              ? "Couldn't detect a Key in this Recording — please pick one."
+              : key.detected
+                ? `${found.root} ${found.scale} (detected)`
+                : (
                   <>
-                    Detected: {found!.root} {found!.scale} ·{" "}
+                    Detected: {found.root} {found.scale} ·{" "}
                     <button
                       className="link"
                       onClick={() => {

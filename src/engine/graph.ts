@@ -1,6 +1,6 @@
 // Builds the audio path for the Recording. The same function feeds live playback
-// (AudioContext) and offline rendering (OfflineAudioContext), so what you hear is
-// what gets rendered.
+// (AudioContext) and offline mixing (OfflineAudioContext), so what you hear is
+// what ends up in the Mixdown.
 
 export interface Trim {
   start: number;
@@ -45,8 +45,8 @@ export function scheduleRecording(
   return source;
 }
 
-/** Render the kept range of the Recording offline, in stereo (a mono Recording plays in both channels). */
-export async function renderRecording(buffer: AudioBuffer, trim: Trim): Promise<AudioBuffer> {
+/** Produce the kept range of the Recording offline, in stereo (a mono Recording plays in both channels). */
+export async function mixOffline(buffer: AudioBuffer, trim: Trim): Promise<AudioBuffer> {
   const length = Math.max(1, Math.round((trim.end - trim.start) * buffer.sampleRate));
   const ctx = new OfflineAudioContext(2, length, buffer.sampleRate);
   scheduleRecording(ctx, ctx.destination, buffer, trim, trim.start);

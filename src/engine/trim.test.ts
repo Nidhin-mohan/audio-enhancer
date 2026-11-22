@@ -41,14 +41,14 @@ describe("Trim", () => {
   it("renders only the kept range", async () => {
     const s = await loadedDc(3);
     s.setTrim({ start: 0.5, end: 2 });
-    const out = await s.render();
+    const out = await s.mixAudio();
     expect(out.duration).toBeCloseTo(1.5, 2);
   });
 
   it("fades from silence at the start and to silence at the end", async () => {
     const s = await loadedDc(2);
     s.setTrim({ fadeIn: 0.5, fadeOut: 0.5 });
-    const d = (await s.render()).getChannelData(0);
+    const d = (await s.mixAudio()).getChannelData(0);
     const sr = 44100;
     expect(rms(d, 0, 200)).toBeLessThan(0.01); // silent at the very start
     expect(rms(d, d.length - 200, d.length)).toBeLessThan(0.01); // silent at the very end
@@ -87,7 +87,7 @@ describe("Trim", () => {
   });
 });
 
-describe("Loop and master volume", () => {
+describe("Loop and listening volume", () => {
   it("loops the trimmed range while Loop is on", async () => {
     const s = await loadedDc(3);
     s.setTrim({ start: 0.5, end: 0.8 });
@@ -101,13 +101,13 @@ describe("Loop and master volume", () => {
     expect(s.getState().transport.loop).toBe(true);
   });
 
-  it("master volume changes listening level only, never the rendered Mixdown", async () => {
+  it("listening volume changes listening level only, never the rendered Mixdown", async () => {
     studio = createStudio();
     await studio.load(wavFile([sine(440, 1, 44100, 0.5)]));
-    const before = rms((await studio.render()).getChannelData(0), 0, 44100);
-    studio.setMasterVolume(0.2);
-    expect(studio.getState().transport.masterVolume).toBe(0.2);
-    const after = rms((await studio.render()).getChannelData(0), 0, 44100);
+    const before = rms((await studio.mixAudio()).getChannelData(0), 0, 44100);
+    studio.setListeningVolume(0.2);
+    expect(studio.getState().transport.listeningVolume).toBe(0.2);
+    const after = rms((await studio.mixAudio()).getChannelData(0), 0, 44100);
     expect(after).toBeCloseTo(before, 4);
   });
 });

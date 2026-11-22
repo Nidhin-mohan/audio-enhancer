@@ -86,6 +86,19 @@ describe("Key detection", () => {
     expect(s.getState().mix.key).toEqual({ root: "C", scale: "major", detected: true });
   });
 
+  it("reports when no Key could be detected (e.g. silence)", async () => {
+    studio = createStudio();
+    await studio.load(wavFile([new Float32Array(SR * 3)], SR));
+    expect(studio.getState().keyDetection).toBe("detecting");
+    await vi.waitFor(() => expect(studio.getState().keyDetection).toBe("not-found"), { timeout: 10000 });
+    expect(studio.getState().detectedKey).toBeNull();
+  });
+
+  it("reports the Key as found once detected", async () => {
+    const s = await detect(progression([["C", "E", "G"], ["F", "A", "C"], ["G", "B", "D"], ["C", "E", "G"]]));
+    expect(s.getState().keyDetection).toBe("found");
+  });
+
   it("re-detects the Key when a new Recording is loaded", async () => {
     const s = await detect(progression([["C", "E", "G"], ["F", "A", "C"], ["G", "B", "D"], ["C", "E", "G"]]));
     await s.load(wavFile([progression([["E", "G#", "B"], ["A", "C#", "E"], ["B", "D#", "F#"], ["E", "G#", "B"]])], SR));

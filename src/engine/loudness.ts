@@ -6,16 +6,14 @@ type Coeffs = { b: [number, number, number]; a: [number, number] };
 
 /** K-weighting stage 1 (high shelf) and stage 2 (high pass), derived for any sample rate. */
 function kWeighting(sampleRate: number): [Coeffs, Coeffs] {
-  {
-    // Stage 1: high-frequency shelf
-    var f0 = 1681.974450955533;
-    var G = 3.999843853973347;
-    var Q = 0.7071752369554196;
-    var K = Math.tan((Math.PI * f0) / sampleRate);
-    var Vh = Math.pow(10, G / 20);
-    var Vb = Math.pow(Vh, 0.4996667741545416);
-    var a0 = 1 + K / Q + K * K;
-  }
+  // Stage 1: high-frequency shelf
+  const f0 = 1681.974450955533;
+  const G = 3.999843853973347;
+  const Q = 0.7071752369554196;
+  const K = Math.tan((Math.PI * f0) / sampleRate);
+  const Vh = Math.pow(10, G / 20);
+  const Vb = Math.pow(Vh, 0.4996667741545416);
+  const a0 = 1 + K / Q + K * K;
   const shelf: Coeffs = {
     b: [(Vh + (Vb * K) / Q + K * K) / a0, (2 * (K * K - Vh)) / a0, (Vh - (Vb * K) / Q + K * K) / a0],
     a: [(2 * (K * K - 1)) / a0, (1 - K / Q + K * K) / a0],
@@ -69,6 +67,54 @@ export function integratedLoudness(channels: Float32Array[], sampleRate: number)
   const relativeGate = lufs(mean(aboveAbsolute)) - 10;
   const gated = aboveAbsolute.filter((e) => lufs(e) > relativeGate);
   return lufs(mean(gated));
+}
+
+// 4x oversampling with a windowed-sinc interpolator (BS.1770 Annex 2 style true peak).
+const OVERSAMPLE = 4;
+const TAPS_PER_PHASE = 12; // 6 samples either side
+const PHASES: Float64Array[] = Array.from({ length: OVERSAMPLE }, (_, p) => {
+  const frac = p / OVERSAMPLE;
+  const half = TAPS_PER_PHASE / 2;
+  return Float64Array.from({ length: TAPS_PER_PHASE }, (_, k) => {
+    const x = k - half + 1 - frac; // distance from the interpolated point to tap k
+    const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
+    const w = 0.5 + 0.5 * Math.cos((Math.PI * x) / (half + 1)); // Hann window
+    return sinc * w;
+  });
+});
+
+/**
+ * For each sample index i: the largest absolute value of the signal on [i, i+1),
+ * including the peaks between samples, estimated by 4x oversampling.
+ */
+export function interSamplePeaks(c: Float32Array): Float32Array {
+  const n = c.length;
+  const out = new Float32Array(n);
+  const half = TAPS_PER_PHASE / 2;
+  for (let i = 0; i < n; i++) {
+    let peak = Math.abs(c[i]);
+    for (let p = 1; p < OVERSAMPLE; p++) {
+      const h = PHASES[p];
+      let v = 0;
+      for (let k = 0; k < TAPS_PER_PHASE; k++) {
+        const j = i - half + 1 + k;
+        if (j >= 0 && j < n) v += h[k] * c[j];
+      }
+      peak = Math.max(peak, Math.abs(v));
+    }
+    out[i] = peak;
+  }
+  return out;
+}
+
+/** Estimated true (inter-sample) peak over all channels, linear scale. */
+export function truePeak(channels: Float32Array[], _sampleRate?: number): number {
+  let peak = 0;
+  for (const c of channels) {
+    const p = interSamplePeaks(c);
+    for (let i = 0; i < p.length; i++) if (p[i] > peak) peak = p[i];
+  }
+  return peak;
 }
 
 export function samplePeak(channels: Float32Array[]): number {
