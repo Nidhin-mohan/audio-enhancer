@@ -69,13 +69,13 @@ describe("Key detection", () => {
 
   it("uses the detected Key for Pitch Correction until the user overrides it", async () => {
     const s = await detect(progression([["C", "E", "G"], ["F", "A", "C"], ["G", "B", "D"], ["C", "E", "G"]]));
-    expect(s.getState().mix.key).toEqual({ root: "C", scale: "major", detected: true });
+    expect(s.getState().mix.pitchCorrection.key).toEqual({ root: "C", scale: "major", detected: true });
     s.setKey({ root: "D", scale: "minor" });
     s.commit("Key");
-    expect(s.getState().mix.key).toEqual({ root: "D", scale: "minor", detected: false });
+    expect(s.getState().mix.pitchCorrection.key).toEqual({ root: "D", scale: "minor", detected: false });
     s.useDetectedKey();
     s.commit("Key");
-    expect(s.getState().mix.key).toEqual({ root: "C", scale: "major", detected: true });
+    expect(s.getState().mix.pitchCorrection.key).toEqual({ root: "C", scale: "major", detected: true });
   });
 
   it("Key changes are undoable", async () => {
@@ -83,7 +83,7 @@ describe("Key detection", () => {
     s.setKey({ scale: "chromatic" });
     s.commit("Key");
     s.undo();
-    expect(s.getState().mix.key).toEqual({ root: "C", scale: "major", detected: true });
+    expect(s.getState().mix.pitchCorrection.key).toEqual({ root: "C", scale: "major", detected: true });
   });
 
   it("reports when no Key could be detected (e.g. silence)", async () => {
@@ -103,6 +103,6 @@ describe("Key detection", () => {
     const s = await detect(progression([["C", "E", "G"], ["F", "A", "C"], ["G", "B", "D"], ["C", "E", "G"]]));
     await s.load(wavFile([progression([["E", "G#", "B"], ["A", "C#", "E"], ["B", "D#", "F#"], ["E", "G#", "B"]])], SR));
     await vi.waitFor(() => expect(s.getState().detectedKey).toEqual({ root: "E", scale: "major" }), { timeout: 10000 });
-    expect(s.getState().mix.key).toEqual({ root: "E", scale: "major", detected: true });
+    expect(s.getState().mix.pitchCorrection.key).toEqual({ root: "E", scale: "major", detected: true });
   });
 });

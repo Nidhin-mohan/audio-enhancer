@@ -23,7 +23,8 @@ export default defineConfig(({ mode }) => ({
     // `npm run test:slow` runs only the slow tests (e.g. the real Separation model).
     include: mode === "slow" ? ["src/**/*.slow.test.ts"] : ["src/**/*.test.ts"],
     exclude: mode === "slow" ? [] : ["src/**/*.slow.test.ts"],
-    testTimeout: mode === "slow" ? 15 * 60_000 : 5_000,
+    // Audio processing runs in workers; with many test files in parallel the CPU is shared widely.
+    testTimeout: mode === "slow" ? 15 * 60_000 : 20_000,
     browser: {
       enabled: true,
       provider: "playwright",

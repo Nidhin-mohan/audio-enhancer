@@ -22,6 +22,7 @@ async function separated(stems: Partial<Record<"vocals" | "drums" | "bass" | "ot
   studio = createStudio({ separator: fakeSeparator(stems) });
   await studio.load(wavFile([sine(440, 3, SR, 0.1)], SR));
   await studio.separate();
+  studio.setPitchCorrection({ enabled: false }); // these tests are about Noise Reduction and Vocal Boost
   return studio;
 }
 async function mixedChannel(s: Studio) {
@@ -65,6 +66,15 @@ describe("Noise Reduction", () => {
   it("is on by default at 60 after Separation", async () => {
     const s = await separated({ vocals: noisyVoice });
     expect(s.getState().mix.noiseReduction).toEqual({ enabled: true, amount: 60 });
+  });
+
+  it("a mix already waiting on the vocals still finishes when settings change meanwhile", async () => {
+    const s = await separated({ vocals: noisyVoice });
+    const first = s.mixAudio(); // starts processing with amount 60
+    s.setNoiseReduction({ amount: 10 }); // supersedes that job
+    const second = s.mixAudio();
+    await expect(first).resolves.toBeTruthy();
+    await expect(second).resolves.toBeTruthy();
   });
 
   it("removes background hiss from the vocals while keeping the voice", async () => {

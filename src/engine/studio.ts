@@ -6,7 +6,16 @@ import { mixOffline, schedulePlayback, type Layer, type ScheduledPlayback, type 
 import { createHistory, type HistoryLabels } from "./history";
 import type { DetectedKey, NoteName, Scale } from "./key";
 import { integratedLoudness } from "./loudness";
-import { vocalChainActive, type NoiseReductionSettings } from "./vocal-processing";
+import type { PitchSettings } from "./pitch";
+import {
+  BUILT_IN_PRESETS,
+  defaultStorage,
+  loadSavedPresets,
+  storeSavedPresets,
+  type PitchPreset,
+  type PresetStorage,
+} from "./presets";
+import { vocalChainActive, type NoiseReductionSettings, type VocalChain } from "./vocal-processing";
 import { MIXDOWN_EXTENSION, type MixdownFormat, type MixdownLoudness } from "./mixdown";
 import {
   STEM_NAMES,
@@ -18,7 +27,7 @@ import {
 import { runWorker } from "./workers";
 
 export type { DetectedKey, HistoryLabels, MixdownFormat, MixdownLoudness, NoteName, Scale, Trim };
-export type { SeparationState, Separator, StemName };
+export type { SeparationState, Separator, StemName, PitchSettings, PitchPreset, PresetStorage };
 export { STEM_NAMES };
 
 /** The Key Pitch Correction snaps to; `detected` is true while it follows the detected Key. */
@@ -41,6 +50,16 @@ export interface MixdownSettings {
 }
 
 export type { NoiseReductionSettings };
+
+export interface PitchCorrectionSettings {
+  enabled: boolean;
+  /** Name of the Preset the settings came from. */
+  preset: string;
+  /** True once any control was changed since choosing the Preset (shown as "Custom"). */
+  modified: boolean;
+  key: MixKey;
+  settings: PitchSettings;
+}
 
 export interface VocalBoostSettings {
   /** While true, `db` follows the suggested level worked out from the Stems. */
@@ -65,7 +84,7 @@ export interface Mix {
   stems: Record<StemName, StemSettings>;
   noiseReduction: NoiseReductionSettings;
   vocalBoost: VocalBoostSettings;
-  key: MixKey;
+  pitchCorrection: PitchCorrectionSettings;
   mixdown: MixdownSettings;
 }
 
@@ -95,11 +114,17 @@ export interface StudioState {
   separation: SeparationState;
   /** True while the vocals' effects (Noise Reduction, Pitch Correction) are being recalculated. */
   processingVocals: boolean;
+  /** Built-in Pitch Correction Presets followed by the user's saved ones. */
+  pitchPresets: PitchPreset[];
+  /** False when browser storage is blocked: saved Presets then last only for this session. */
+  presetStorageAvailable: boolean;
 }
 
 export interface StudioOptions {
   /** Defaults to the real in-browser model; tests pass a fast stand-in. */
   separator?: Separator;
+  /** Where saved Pitch Correction Presets live; defaults to localStorage. */
+  storage?: PresetStorage | null;
 }
 
 export interface Studio {
@@ -121,6 +146,13 @@ export interface Studio {
   setNoiseReduction(patch: Partial<NoiseReductionSettings>): void;
   /** A manual `db` turns Auto off; `{ auto: true }` goes back to the suggested level. */
   setVocalBoost(patch: Partial<VocalBoostSettings>): void;
+  /** Switch on/off and/or change controls; changing a control makes the Preset "Custom". */
+  setPitchCorrection(patch: Partial<PitchSettings> & { enabled?: boolean }): void;
+  applyPitchPreset(name: string): void;
+  /** Back to the values of the Preset the current settings are based on. */
+  resetPitchPreset(): void;
+  /** Save the current settings as the user's own Preset (not an undo step). */
+  savePitchPreset(name: string): void;
   setLoop(on: boolean): void;
   setListeningVolume(volume: number): void;
   setAB(mode: Transport["ab"]): void;
@@ -162,6 +194,21 @@ const DEFAULT_STEMS: Record<StemName, StemSettings> = {
 };
 const DEFAULT_NOISE_REDUCTION: NoiseReductionSettings = { enabled: true, amount: 60 };
 const DEFAULT_VOCAL_BOOST: VocalBoostSettings = { auto: true, db: 0 };
+const DEFAULT_PITCH: PitchCorrectionSettings = {
+  enabled: true,
+  preset: "Natural",
+  modified: false,
+  key: DEFAULT_KEY,
+  settings: BUILT_IN_PRESETS[0].settings,
+};
+const PITCH_LIMITS: Record<keyof PitchSettings, [number, number] | null> = {
+  retuneMs: [0, 400],
+  humanize: [0, 100],
+  amount: [0, 100],
+  vibrato: [0, 100],
+  mix: [0, 100],
+  formant: null,
+};
 const sameTrim = (a: Trim, b: Trim) =>
   a.start === b.start && a.end === b.end && a.fadeIn === b.fadeIn && a.fadeOut === b.fadeOut;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -224,6 +271,10 @@ const realSeparator: Separator = async (input, onProgress, signal) => {
 
 export function createStudio(options: StudioOptions = {}): Studio {
   const separator = options.separator ?? realSeparator;
+  const storage = options.storage === undefined ? defaultStorage() : options.storage;
+  const saved = loadSavedPresets(storage);
+  let savedPresets = saved.presets;
+  const allPresets = () => [...BUILT_IN_PRESETS, ...savedPresets];
   const ctx = new AudioContext();
   const listeningGain = ctx.createGain();
   listeningGain.connect(ctx.destination);
@@ -235,7 +286,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
       stems: DEFAULT_STEMS,
       noiseReduction: DEFAULT_NOISE_REDUCTION,
       vocalBoost: DEFAULT_VOCAL_BOOST,
-      key: DEFAULT_KEY,
+      pitchCorrection: DEFAULT_PITCH,
       mixdown: { format: "mp3", loudness: -14 },
     },
     transport: { loop: false, listeningVolume: 0.8, ab: "processed" },
@@ -246,11 +297,14 @@ export function createStudio(options: StudioOptions = {}): Studio {
     keyDetection: "idle",
     separation: { status: "idle" },
     processingVocals: false,
+    pitchPresets: allPresets(),
+    presetStorageAvailable: saved.available,
   };
   let loadToken = 0;
   /** The vocals after their effects chain, for the settings in `key`. */
   let processedVocals: { key: string; buffer: AudioBuffer } | null = null;
-  let vocalJob: { key: string; done: Promise<void>; worker: Worker } | null = null;
+  type Waiter = { resolve: () => void; reject: (e: Error) => void };
+  let vocalJob: { key: string; worker: Worker; waiters: Waiter[] } | null = null;
   let vocalTimer = 0;
   let suggestedBoostDb = 0;
   listeningGain.gain.value = state.transport.listeningVolume;
@@ -279,42 +333,71 @@ export function createStudio(options: StudioOptions = {}): Studio {
   };
 
   // ---- Vocal effects chain (Noise Reduction, Pitch Correction): recalculated in a worker ----
-  const vocalSettings = (mix: Mix) => ({ noiseReduction: mix.noiseReduction });
+  const vocalSettings = (mix: Mix): VocalChain => {
+    const pc = mix.pitchCorrection;
+    return {
+      noiseReduction: mix.noiseReduction,
+      pitch: pc.enabled ? { root: pc.key.root, scale: pc.key.scale, settings: pc.settings } : null,
+    };
+  };
   const vocalKey = (mix: Mix) => JSON.stringify(vocalSettings(mix));
   /** The vocals buffer to play now: processed if ready for the current settings, otherwise the best available. */
   const vocalsBuffer = (): AudioBuffer => {
     if (!vocalChainActive(vocalSettings(state.mix))) return stems!.vocals;
     return processedVocals?.buffer ?? stems!.vocals;
   };
-  /** Make sure the processed vocals match the current settings (resolves when they do). */
+  /**
+   * Make sure the processed vocals match the current settings. Resolves once they do,
+   * even if the settings change again meanwhile: a superseded job hands its waiters
+   * on to the job that replaces it, so nobody is left waiting forever.
+   */
   const ensureVocals = (): Promise<void> => {
     if (!stems) return Promise.resolve();
     const settings = vocalSettings(state.mix);
     const key = vocalKey(state.mix);
-    if (!vocalChainActive(settings) || processedVocals?.key === key) return Promise.resolve();
-    if (vocalJob?.key === key) return vocalJob.done;
+    const waitForJob = () => new Promise<void>((resolve, reject) => vocalJob!.waiters.push({ resolve, reject }));
+    if (!vocalChainActive(settings) || processedVocals?.key === key) {
+      // Nothing to calculate any more: release anyone waiting on a now-pointless job.
+      if (vocalJob) {
+        vocalJob.worker.terminate();
+        vocalJob.waiters.forEach((w) => w.resolve());
+        vocalJob = null;
+        setState({ processingVocals: false });
+      }
+      return Promise.resolve();
+    }
+    if (vocalJob?.key === key) return waitForJob();
+
+    // Start a job for the current settings; anyone waiting on an older job now waits on this one.
+    const inherited = vocalJob?.waiters ?? [];
     vocalJob?.worker.terminate();
     const raw = stems.vocals;
     const channels = [raw.getChannelData(0).slice(), raw.getChannelData(1).slice()];
     const worker = new Worker(new URL("./vocals.worker.ts", import.meta.url), { type: "module" });
     const token = loadToken;
+    const job = { key, worker, waiters: inherited };
+    vocalJob = job;
     setState({ processingVocals: true });
-    const done = runWorker<Float32Array[]>(
-      worker,
-      { channels, sampleRate: raw.sampleRate, ...settings },
-      channels.map((c) => c.buffer),
-    ).then((out) => {
-      if (token !== loadToken || vocalJob?.key !== key) return;
-      const b = ctx.createBuffer(2, out[0].length, raw.sampleRate);
-      b.copyToChannel(out[0] as Float32Array<ArrayBuffer>, 0);
-      b.copyToChannel(out[1] as Float32Array<ArrayBuffer>, 1);
-      processedVocals = { key, buffer: b };
-      vocalJob = null;
-      setState({ processingVocals: false });
-      restartIfPlaying(); // hear the new vocals straight away
-    });
-    vocalJob = { key, done, worker };
-    return done;
+    runWorker<Float32Array[]>(worker, { channels, sampleRate: raw.sampleRate, ...settings }, channels.map((c) => c.buffer)).then(
+      (out) => {
+        if (token !== loadToken || vocalJob !== job) return; // superseded: its waiters moved on
+        const b = ctx.createBuffer(2, out[0].length, raw.sampleRate);
+        b.copyToChannel(out[0] as Float32Array<ArrayBuffer>, 0);
+        b.copyToChannel(out[1] as Float32Array<ArrayBuffer>, 1);
+        processedVocals = { key, buffer: b };
+        vocalJob = null;
+        setState({ processingVocals: false });
+        job.waiters.forEach((w) => w.resolve());
+        restartIfPlaying(); // hear the new vocals straight away
+      },
+      (err: Error) => {
+        if (vocalJob !== job) return;
+        vocalJob = null;
+        setState({ processingVocals: false });
+        job.waiters.forEach((w) => w.reject(new Error(`Vocal effects failed: ${err.message}`)));
+      },
+    );
+    return waitForJob();
   };
   /** Recalculate the vocals shortly after the last settings change (sliders move many times per second). */
   const scheduleVocals = () => {
@@ -417,6 +500,13 @@ export function createStudio(options: StudioOptions = {}): Studio {
     return mixOffline(layers(), trim(), sampleRate);
   };
 
+  const applyPreset = (name: string) => {
+    const preset = allPresets().find((p) => p.name === name);
+    if (!preset) return;
+    const pc = state.mix.pitchCorrection;
+    applyMix({ ...state.mix, pitchCorrection: { ...pc, preset: name, modified: false, settings: { ...preset.settings } } });
+  };
+
   const restoreFromHistory = (mix: Mix | null) => {
     if (mix) applyMix(mix, { history: history.labels() });
   };
@@ -434,9 +524,13 @@ export function createStudio(options: StudioOptions = {}): Studio {
       .then((found) => {
         if (token !== loadToken) return; // a newer Recording was loaded meanwhile
         if (!found) return setState({ keyDetection: "not-found" });
-        const adopt = (mix: Mix): Mix => (mix.key.detected ? { ...mix, key: { ...found, detected: true } } : mix);
+        const adopt = (mix: Mix): Mix =>
+          mix.pitchCorrection.key.detected
+            ? { ...mix, pitchCorrection: { ...mix.pitchCorrection, key: { ...found, detected: true } } }
+            : mix;
         history.rewrite(adopt);
         setState({ detectedKey: found, keyDetection: "found", mix: adopt(state.mix), history: history.labels() });
+        scheduleVocals(); // Pitch Correction now snaps to the real Key
       });
   };
 
@@ -463,6 +557,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
       separationAbort?.abort();
       stopPlayback();
       vocalJob?.worker.terminate();
+      vocalJob?.waiters.forEach((w) => w.resolve()); // their Stems are gone; nothing left to wait for
       vocalJob = null;
       processedVocals = null;
       buffer = decoded;
@@ -474,7 +569,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
         stems: DEFAULT_STEMS,
         noiseReduction: DEFAULT_NOISE_REDUCTION,
         vocalBoost: DEFAULT_VOCAL_BOOST,
-        key: DEFAULT_KEY,
+        pitchCorrection: { ...DEFAULT_PITCH, key: DEFAULT_KEY },
       };
       history.reset(mix);
       setState({
@@ -622,12 +717,58 @@ export function createStudio(options: StudioOptions = {}): Studio {
       return mixAudio();
     },
     setKey(patch) {
-      setState({ mix: { ...state.mix, key: { ...state.mix.key, ...patch, detected: false } } });
+      const pc = state.mix.pitchCorrection;
+      applyMix({ ...state.mix, pitchCorrection: { ...pc, key: { ...pc.key, ...patch, detected: false } } });
     },
     useDetectedKey() {
       const found = state.detectedKey;
       if (!found) return;
-      setState({ mix: { ...state.mix, key: { ...found, detected: true } } });
+      const pc = state.mix.pitchCorrection;
+      applyMix({ ...state.mix, pitchCorrection: { ...pc, key: { ...found, detected: true } } });
+    },
+    setPitchCorrection(patch) {
+      const { enabled, ...controls } = patch;
+      const pc = state.mix.pitchCorrection;
+      const settings = { ...pc.settings };
+      let changed = false;
+      for (const [k, v] of Object.entries(controls) as [keyof PitchSettings, number | boolean][]) {
+        const limits = PITCH_LIMITS[k];
+        const value = limits && typeof v === "number" ? clamp(v, limits[0], limits[1]) : v;
+        if (settings[k] !== value) (settings as Record<string, unknown>)[k] = value, (changed = true);
+      }
+      applyMix({
+        ...state.mix,
+        pitchCorrection: { ...pc, enabled: enabled ?? pc.enabled, settings, modified: pc.modified || changed },
+      });
+    },
+    applyPitchPreset(name) {
+      applyPreset(name);
+    },
+    resetPitchPreset() {
+      applyPreset(state.mix.pitchCorrection.preset);
+    },
+    savePitchPreset(rawName) {
+      const name = rawName.trim();
+      if (!name) return;
+      const settings = { ...state.mix.pitchCorrection.settings };
+      const builtIn = BUILT_IN_PRESETS.some((p) => p.name === name);
+      const finalName = builtIn ? `${name} (mine)` : name;
+      savedPresets = [...savedPresets.filter((p) => p.name !== finalName), { name: finalName, settings, builtIn: false }];
+      const stored = storeSavedPresets(storage, savedPresets);
+      // The Mix now simply follows the new Preset; history is told so this isn't an undo step.
+      const pc = state.mix.pitchCorrection;
+      const mix = { ...state.mix, pitchCorrection: { ...pc, preset: finalName, modified: false } };
+      history.rewrite((m) =>
+        JSON.stringify(m.pitchCorrection.settings) === JSON.stringify(settings)
+          ? { ...m, pitchCorrection: { ...m.pitchCorrection, preset: finalName, modified: false } }
+          : m,
+      );
+      setState({
+        mix,
+        pitchPresets: allPresets(),
+        presetStorageAvailable: state.presetStorageAvailable && stored,
+        history: history.labels(),
+      });
     },
     setMixdown(patch) {
       setState({ mix: { ...state.mix, mixdown: { ...state.mix.mixdown, ...patch } } });

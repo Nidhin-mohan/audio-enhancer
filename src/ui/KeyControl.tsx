@@ -5,7 +5,7 @@ const SCALES: Scale[] = ["major", "minor", "chromatic"];
 
 /** The Key Pitch Correction snaps to: detected automatically, overridable. */
 export function KeyControl({ studio, state }: { studio: Studio; state: StudioState }) {
-  const { key } = state.mix;
+  const { key } = state.mix.pitchCorrection;
   const found = state.detectedKey;
   const disabled = !state.recording;
 
