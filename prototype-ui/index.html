@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Enhancer — Studio prototype</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#0f1115; --s1:#161a21; --s2:#1d222b; --s3:#252b36; --line:#262c36; --line2:#323a47;
+    --ink:#e6e8ec; --muted:#8b93a1; --dim:#5d6573;
+    --accent:#a78bfa; --accentD:#7c5ce0; --glow:0 0 0 1px rgba(167,139,250,.6), 0 0 14px rgba(167,139,250,.35);
+    --vocals:#c9798f; --drums:#c9a26a; --bass:#6f9fc9; --other:#7aa89a;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:13.5px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display:grid; grid-template-rows:auto 1fr auto; overflow:hidden; }
+  button, input, select { font:inherit; color:inherit; }
+  .num, output, [data-time] { font-variant-numeric:tabular-nums; }
+  .sc { font-variant:all-small-caps; letter-spacing:.07em; color:var(--muted); font-weight:600; font-size:13px; }
+  .muted { color:var(--muted); } .dim { color:var(--dim); font-size:12px; }
+  .grow { flex:1; }
+  .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .banner { background:#1a1408; color:#d9b45a; border-bottom:1px solid #3a2e12; text-align:center; font-size:11.5px; padding:3px 8px; letter-spacing:.04em; }
+
+  /* shell */
+  .shell { display:grid; grid-template-columns:52px 1fr 340px; min-height:0; }
+  .shell.nopanel { grid-template-columns:52px 1fr; }
+  .shell.nopanel .panel { display:none; }
+  .rail { background:var(--s1); border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 0; }
+  .rail button { position:relative; width:38px; height:38px; border-radius:9px; border:1px solid transparent; background:none; color:var(--muted); cursor:pointer; display:grid; place-items:center; }
+  .rail button:hover:not(:disabled) { background:var(--s2); color:var(--ink); }
+  .rail button.on { color:var(--accent); background:var(--s2); border-color:var(--line2); }
+  .rail button:disabled { opacity:.35; cursor:not-allowed; }
+  .rail svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+  .rail button.hist { font-size:19px; line-height:1; height:32px; }
+  .rail-sep { width:26px; height:1px; background:var(--line2); margin:4px 0 6px; }
+  #toast.subtle { border-color:var(--line2); box-shadow:none; font-weight:500; padding:6px 14px; font-size:12.5px; }
+  [data-tip]:hover::after { content:attr(data-tip); position:absolute; left:46px; top:50%; transform:translateY(-50%); white-space:nowrap; background:#000; color:var(--ink);
+    border:1px solid var(--line2); padding:4px 9px; border-radius:6px; font-size:12px; z-index:50; pointer-events:none; }
+  .main { overflow:auto; padding:14px 16px 24px; min-width:0; }
+  .panel { background:var(--s1); border-left:1px solid var(--line); overflow:auto; }
+
+  /* buttons & inputs */
+  .btn { background:var(--s2); border:1px solid var(--line2); border-radius:7px; padding:6px 12px; cursor:pointer; }
+  .btn:hover:not(:disabled) { border-color:#4a5363; }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn.primary { background:var(--accentD); border-color:var(--accent); color:#fff; }
+  .btn.primary:hover:not(:disabled) { box-shadow:var(--glow); }
+  .link { background:none; border:0; color:var(--accent); cursor:pointer; padding:0; font-size:12.5px; }
+  select { background:var(--s2); border:1px solid var(--line2); border-radius:6px; padding:4px 6px; }
+  input[type=range] { accent-color:var(--accent); width:100%; }
+  input:disabled, select:disabled { opacity:.4; }
+  output { color:var(--muted); font-size:12px; text-align:right; min-width:52px; display:inline-block; }
+  .seg { display:inline-flex; background:var(--s2); border:1px solid var(--line2); border-radius:7px; padding:2px; }
+  .seg button { background:none; border:0; padding:4px 11px; border-radius:5px; cursor:pointer; color:var(--muted); }
+  .seg button.on { background:var(--s3); color:var(--ink); box-shadow:var(--glow); }
+  .chip { background:var(--s2); border:1px solid var(--line2); border-radius:999px; padding:4px 11px; cursor:pointer; font-size:12.5px; }
+  .chip.on { border-color:var(--accent); color:#fff; box-shadow:var(--glow); }
+  .chip.custom { font-style:italic; }
+  .switch { position:relative; display:inline-block; width:32px; height:18px; flex:none; }
+  .switch input { opacity:0; width:0; height:0; }
+  .switch span { position:absolute; inset:0; background:var(--s3); border:1px solid var(--line2); border-radius:99px; cursor:pointer; transition:.15s; }
+  .switch span::before { content:""; position:absolute; width:12px; height:12px; left:2px; top:2px; background:var(--muted); border-radius:50%; transition:.15s; }
+  .switch input:checked + span { background:var(--accentD); border-color:var(--accent); box-shadow:var(--glow); }
+  .switch input:checked + span::before { transform:translateX(14px); background:#fff; }
+  .switch input:disabled + span { opacity:.4; cursor:not-allowed; }
+  .ms { width:26px; height:22px; border:1px solid var(--line2); background:var(--s2); border-radius:5px; font-size:11px; font-weight:700; cursor:pointer; color:var(--muted); }
+  .ms.on { background:#c9a23a; border-color:#e0bb55; color:#111; box-shadow:0 0 10px rgba(224,187,85,.4); }
+  .ms.solo.on { background:#3fae7a; border-color:#5fd39a; box-shadow:0 0 10px rgba(95,211,154,.4); }
+  .ms:disabled { opacity:.35; cursor:not-allowed; }
+  .hint { border:1px dashed var(--line2); background:rgba(167,139,250,.06); color:#c8bdf5; border-radius:8px; padding:7px 11px; font-size:12.5px; }
+  .note { color:var(--dim); font-size:11.5px; margin-top:6px; }
+  .bar { height:6px; background:var(--s3); border-radius:99px; overflow:hidden; }
+  .bar > div { height:100%; background:linear-gradient(90deg, var(--accentD), var(--accent)); box-shadow:0 0 10px var(--accent); }
+  .ok { color:#5fd39a; }
+
+  /* main header + empty state */
+  .mhead { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+  .mhead .name { font-size:16px; font-weight:600; }
+  .drop { border:1.5px dashed var(--line2); border-radius:14px; padding:56px 20px; text-align:center; cursor:pointer; background:var(--s1); }
+  .drop:hover, .drop.over { border-color:var(--accent); box-shadow:var(--glow); }
+  .drop h2 { margin:0 0 6px; font-size:20px; font-weight:600; }
+
+  /* tracks */
+  .lane { display:grid; grid-template-columns:230px 1fr; gap:10px; background:var(--s1); border:1px solid var(--line); border-radius:10px; padding:8px; margin-bottom:6px; }
+  .lane.off { opacity:.55; }
+  .lh { display:flex; flex-direction:column; gap:5px; justify-content:center; min-width:0; }
+  .lh .t { display:flex; align-items:center; gap:7px; font-weight:600; text-transform:capitalize; }
+  .lh .fader { display:flex; align-items:center; gap:6px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .lw { position:relative; min-width:0; }
+  .ruler { position:relative; height:20px; border-bottom:1px solid var(--line2); margin-bottom:4px; cursor:pointer; overflow:hidden; }
+  .ruler .tk { position:absolute; bottom:0; height:6px; border-left:1px solid var(--dim); }
+  .ruler .tl { position:absolute; top:1px; font-size:10.5px; color:var(--muted); transform:translateX(3px); }
+  .wavebox { position:relative; height:64px; background:var(--bg); border:1px solid var(--line); border-radius:6px; cursor:text; overflow:hidden; touch-action:none; }
+  .wavebox.rec { height:110px; }
+  .wavebox canvas { width:100%; height:100%; display:block; }
+  .wavebox .empty { position:absolute; inset:0; display:grid; place-items:center; color:var(--dim); font-size:12px; }
+  .playhead { position:absolute; top:0; bottom:0; width:1.5px; margin-left:-.75px; background:#ff5c8a; box-shadow:0 0 8px #ff5c8a; pointer-events:none; z-index:4; }
+  .shade { position:absolute; top:0; bottom:0; background:rgba(0,0,0,.62); pointer-events:none; z-index:2; }
+  .fades { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; }
+  .h { position:absolute; z-index:5; cursor:ew-resize; }
+  .h.trim { top:0; bottom:0; width:14px; margin-left:-7px; }
+  .h.trim::before { content:""; position:absolute; left:6px; top:0; bottom:0; width:2px; background:var(--accent); box-shadow:0 0 8px var(--accent); }
+  .h.trim::after { content:""; position:absolute; top:50%; margin-top:-12px; width:8px; height:24px; background:var(--accent); border-radius:3px; }
+  .h.trim.l::after { left:7px; border-radius:0 3px 3px 0; }
+  .h.trim.r::after { left:-1px; border-radius:3px 0 0 3px; }
+  .h.fade { top:0; width:16px; height:14px; margin-left:-8px; }
+  .h.fade::before { content:""; position:absolute; left:2px; top:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:10px solid #f0f0f5; filter:drop-shadow(0 0 3px var(--accent)); }
+  .h:hover::before { filter:drop-shadow(0 0 6px #fff); }
+
+  /* right panel */
+  .ph { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:8px; }
+  .acc { border-bottom:1px solid var(--line); }
+  .acc-h { width:100%; display:flex; align-items:center; gap:8px; background:none; border:0; padding:10px 14px; cursor:pointer; text-align:left; }
+  .acc-h:hover { background:var(--s2); }
+  .acc-h svg { width:12px; height:12px; stroke:var(--muted); fill:none; stroke-width:2; transition:transform .15s; }
+  .acc.open .acc-h svg { transform:rotate(90deg); }
+  .acc-h .sc { color:var(--ink); }
+  .acc-h output { margin-left:auto; }
+  .acc-b { padding:4px 14px 14px; display:flex; flex-direction:column; gap:10px; }
+  .ctl { display:grid; grid-template-columns:118px 1fr 56px; align-items:center; gap:8px; }
+  .ctl > span { color:var(--muted); font-size:12.5px; }
+  .pviz { background:var(--bg); border:1px solid var(--line); border-radius:6px; }
+  .save { display:flex; gap:6px; }
+  .save input { flex:1; background:var(--bg); border:1px solid var(--line2); border-radius:6px; padding:4px 8px; min-width:0; }
+
+  /* transport */
+  .transport { background:var(--s1); border-top:1px solid var(--line); display:flex; align-items:center; gap:10px; padding:8px 14px; flex-wrap:wrap; }
+  .tbtn { width:34px; height:34px; border-radius:50%; border:1px solid var(--line2); background:var(--s2); cursor:pointer; display:grid; place-items:center; color:var(--ink); }
+  .tbtn svg { width:15px; height:15px; fill:currentColor; }
+  .tbtn.play { width:42px; height:42px; background:var(--accentD); border-color:var(--accent); box-shadow:var(--glow); }
+  .tbtn.on { color:var(--accent); box-shadow:var(--glow); }
+  .tbtn:disabled { opacity:.35; cursor:not-allowed; box-shadow:none; }
+  .clock { font-size:20px; font-weight:500; letter-spacing:.02em; background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:3px 10px; }
+  .vol { display:flex; align-items:center; gap:6px; width:190px; }
+
+  #statePanel { position:fixed; right:12px; bottom:68px; z-index:40; background:var(--s2); border:1px solid var(--line2); border-radius:9px; box-shadow:0 10px 30px rgba(0,0,0,.5); max-width:340px; }
+  #statePanel summary { padding:6px 12px; cursor:pointer; font-size:12px; color:var(--muted); }
+  #statePanel pre { margin:0; padding:0 12px 10px; max-height:50vh; overflow:auto; font-size:11px; line-height:1.35; color:#c7cbd3; }
+  #toast { position:fixed; left:50%; top:44px; transform:translateX(-50%); background:var(--s3); border:1px solid var(--accent); box-shadow:var(--glow); padding:10px 20px; border-radius:9px; z-index:60; font-weight:600; }
+  @media (max-width:980px) {
+    .shell { grid-template-columns:52px 1fr; grid-auto-rows:auto; overflow:auto; }
+    .main, .panel { overflow:visible; } .panel { grid-column:2; border-left:0; border-top:1px solid var(--line); }
+    .rail { grid-row:1 / span 2; } .lane { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="banner">PROTOTYPE — throwaway, fake audio, not the real app</div>
+<div class="shell" id="shell">
+  <nav class="rail" id="rail"></nav>
+  <main class="main" id="main"></main>
+  <aside class="panel" id="panel"></aside>
+</div>
+<footer class="transport" id="transport"></footer>
+<details id="statePanel"><summary>State (the Mix)</summary><pre id="stateJson"></pre></details>
+<div id="toast" hidden></div>
+<input type="file" id="file" accept="audio/*" hidden>
+
+<script>
+// ================= State (the Mix) =================
+const PC_PRESETS = {
+  Natural: { retuneMs: 120, humanize: 60, amount: 70, vibrato: 80, formant: true,  mix: 100 },
+  Tight:   { retuneMs: 40,  humanize: 30, amount: 90, vibrato: 50, formant: true,  mix: 100 },
+  Hard:    { retuneMs: 0,   humanize: 0,  amount: 100, vibrato: 0, formant: false, mix: 100 },
+};
+const PC_FIELDS = Object.keys(PC_PRESETS.Natural);
+const state = {
+  recording: { name: null, durationSec: 0, trimStart: 0, trimEnd: 0, fadeIn: 0, fadeOut: 0 },
+  separation: { status: "idle", progress: 0 },
+  stems: {
+    vocals: { level: 0, mute: false, solo: false },
+    drums:  { level: 0, mute: false, solo: false },
+    bass:   { level: 0, mute: false, solo: false },
+    other:  { level: -6, mute: false, solo: false },
+  },
+  noiseReduction: { amount: 60 },
+  vocalBoost: { auto: true, db: 4 },
+  pitchCorrection: { enabled: true, preset: "Natural", basedOn: "Natural",
+    key: { root: "A", scale: "minor", detected: true }, ...PC_PRESETS.Natural, savedPresets: {} },
+  ab: "processed",
+  transport: { loop: false, masterVolume: 80 },
+  export: { format: "MP3 320 kbps", loudness: "-14 LUFS" },
+};
+// UI-only (not part of the Mix)
+const ui = { playing: false, pos: 0, panel: true, acc: { nr: true, vb: true, pc: true, mix: true }, saving: false };
+
+const STEMS = ["vocals", "drums", "bass", "other"];
+const COL = { vocals: "#c9798f", drums: "#c9a26a", bass: "#6f9fc9", other: "#7aa89a" };
+const NOTE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALE = { major: [0, 2, 4, 5, 7, 9, 11], minor: [0, 2, 3, 5, 7, 8, 10], chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] };
+const FORMATS = ["MP3 320 kbps", "WAV 16-bit", "AAC 256 kbps"];
+const LOUDNESS = ["-14 LUFS", "-16 LUFS", "-9 LUFS"];
+
+// ================= Helpers =================
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const r2 = (v) => Math.round(v * 100) / 100;
+const dbG = (db) => Math.pow(10, db / 20);
+const get = (path) => path.split(".").reduce((o, k) => o[k], state);
+function set(path, v) { const ks = path.split("."); const last = ks.pop(); ks.reduce((o, k) => o[k], state)[last] = v; }
+const fmtMs = (s) => String(Math.floor(s / 60)).padStart(2, "0") + ":" + (s % 60).toFixed(3).padStart(6, "0");
+const fmtS = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const loaded = () => !!buffer;
+const sepDone = () => state.separation.status === "done";
+const anySolo = () => STEMS.some((n) => state.stems[n].solo);
+const audible = (n) => !state.stems[n].mute && (!anySolo() || state.stems[n].solo);
+const processed = () => state.ab === "processed";
+const lock = () => (sepDone() ? "" : "disabled");
+function fmtVal(path, v) {
+  if (path.endsWith("level") || path === "vocalBoost.db") return (v > 0 ? "+" : "") + v + " dB";
+  if (path.endsWith("retuneMs")) return v + " ms";
+  if (typeof v === "number") return v + "%";
+  return String(v);
+}
+function rng(seed) {
+  return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+// ================= Undo / Redo (snapshots of the undoable part of the Mix) =================
+// Not undoable: playback, Loop, master volume, A/B, panels, loading, Separation, saving a preset.
+const TRIM_KEYS = ["trimStart", "trimEnd", "fadeIn", "fadeOut"];
+function snap() {
+  const { savedPresets, ...pc } = state.pitchCorrection;
+  return JSON.parse(JSON.stringify({ trim: Object.fromEntries(TRIM_KEYS.map((k) => [k, state.recording[k]])),
+    stems: state.stems, noiseReduction: state.noiseReduction, vocalBoost: state.vocalBoost, pitchCorrection: pc, export: state.export }));
+}
+function restore(s) {
+  const c = JSON.parse(JSON.stringify(s));
+  Object.assign(state.recording, c.trim); state.stems = c.stems; state.noiseReduction = c.noiseReduction;
+  state.vocalBoost = c.vocalBoost; Object.assign(state.pitchCorrection, c.pitchCorrection); state.export = c.export;
+}
+const hist = { undo: [], redo: [] };
+let baseline = snap();
+// Call at the END of a gesture (release / change / click). Records one step if anything undoable changed.
+function commit(label) {
+  const now = snap();
+  if (JSON.stringify(now) === JSON.stringify(baseline)) return;
+  hist.undo.push({ label, snap: baseline }); if (hist.undo.length > 100) hist.undo.shift();
+  hist.redo = []; baseline = now; updateState();
+}
+const absorb = () => { baseline = snap(); };           // accept a non-undoable change into the baseline
+function clearHistory() { hist.undo = []; hist.redo = []; absorb(); }
+function stepHistory(from, to, verb) {
+  const e = from.pop(); if (!e) return;
+  const before = JSON.stringify(snap().trim);
+  to.push({ label: e.label, snap: snap() }); restore(e.snap); baseline = snap();
+  if (JSON.stringify(baseline.trim) !== before) restartIfPlaying();
+  applyLive(); render(); toast(`${verb}: ${e.label}`, 1400);
+}
+const undo = () => stepHistory(hist.undo, hist.redo, "Undo");
+const redo = () => stepHistory(hist.redo, hist.undo, "Redo");
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const LABELS = { "noiseReduction.amount": "Noise Reduction", "vocalBoost.db": "Vocal Boost", "vocalBoost.auto": "Vocal Boost auto",
+  "pitchCorrection.enabled": "Pitch Correction on/off", "pitchCorrection.key.root": "Key root", "pitchCorrection.key.scale": "Key scale",
+  "pitchCorrection.retuneMs": "Retune Speed", "pitchCorrection.humanize": "Humanize", "pitchCorrection.amount": "Correction Amount",
+  "pitchCorrection.vibrato": "Vibrato preserve", "pitchCorrection.formant": "Formant preserve", "pitchCorrection.mix": "Pitch Correction mix",
+  "export.format": "Mixdown format", "export.loudness": "Mixdown loudness",
+  trimStart: "Trim start", trimEnd: "Trim end", fadeIn: "Fade in", fadeOut: "Fade out" };
+const labelFor = (path) => LABELS[path] || (path.startsWith("stems.") ? cap(path.split(".")[1]) + " level" : path);
+
+// ================= Audio engine (Web Audio) =================
+let ctx = null, master = null, buffer = null, recPeaks = null, stemPeaks = {}, G = null, startCtx = 0, startOff = 0, sepTimer = null;
+function ensureCtx() {
+  if (!ctx) { ctx = new AudioContext(); master = ctx.createGain(); master.connect(ctx.destination); }
+  if (ctx.state === "suspended") ctx.resume();
+  master.gain.value = state.transport.masterVolume / 100;
+}
+async function loadFile(f) {
+  if (!f) return;
+  ensureCtx(); stopSource(); ui.playing = false;
+  toast("Decoding " + f.name + "…");
+  try { buffer = await ctx.decodeAudioData(await f.arrayBuffer()); }
+  catch (e) { toast("Couldn't decode that file in this browser"); return; }
+  setRecording(f.name);
+}
+function setRecording(name) {
+  const d = r2(buffer.duration);
+  Object.assign(state.recording, { name, durationSec: d, trimStart: 0, trimEnd: d, fadeIn: 0, fadeOut: 0 });
+  clearInterval(sepTimer); state.separation = { status: "idle", progress: 0 };
+  recPeaks = computePeaks(buffer); stemPeaks = {}; ui.pos = 0; clearHistory();
+  render(); toast("Recording loaded: " + name);
+}
+function computePeaks(buf, N = 2000) {
+  const chans = []; for (let c = 0; c < buf.numberOfChannels; c++) chans.push(buf.getChannelData(c));
+  const len = buf.length, step = Math.max(1, Math.floor(len / N)), out = new Float32Array(N); let mx = 1e-6;
+  for (let i = 0; i < N; i++) {
+    let m = 0; const a = i * step, b = Math.min(len, a + step);
+    for (const ch of chans) for (let j = a; j < b; j++) { const v = Math.abs(ch[j]); if (v > m) m = v; }
+    out[i] = m; if (m > mx) mx = m;
+  }
+  for (let i = 0; i < N; i++) out[i] /= mx;
+  out.max = mx; return out;
+}
+// PROTOTYPE fake Separation: each Stem is the same buffer through a filter
+function stemFilters(c, n) {
+  const mk = (type, f, q) => { const b = c.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q) b.Q.value = q; return b; };
+  const chain = { vocals: [mk("highpass", 300), mk("lowpass", 3400)], bass: [mk("lowpass", 180)],
+    drums: [mk("highpass", 5000)], other: [mk("bandpass", 1200, 0.35)] }[n];
+  for (let i = 1; i < chain.length; i++) chain[i - 1].connect(chain[i]);
+  return [chain[0], chain[chain.length - 1]];
+}
+const stemGainValue = (n) => audible(n) ? dbG(state.stems[n].level) * (n === "vocals" ? dbG(state.vocalBoost.db) : 1) : 0;
+const nrDb = () => -(state.noiseReduction.amount / 100) * 15; // fake Noise Reduction: high-shelf cut
+async function renderStems() {
+  const sr = buffer.sampleRate, buf = buffer;
+  await Promise.all(STEMS.map(async (n) => {
+    const oc = new OfflineAudioContext(1, buf.length, sr), s = oc.createBufferSource(); s.buffer = buf;
+    const [i, o] = stemFilters(oc, n); s.connect(i); o.connect(oc.destination); s.start();
+    const out = await oc.startRendering(); if (buf === buffer) stemPeaks[n] = computePeaks(out);
+  }));
+}
+function scheduleFades(param, off, t0) {
+  const R = state.recording, fi = R.fadeIn, fo = R.fadeOut;
+  const env = (t) => Math.min(fi > 0 ? clamp((t - R.trimStart) / fi, 0, 1) : 1, fo > 0 ? clamp((R.trimEnd - t) / fo, 0, 1) : 1);
+  param.setValueAtTime(env(off), t0);
+  [R.trimStart + fi, R.trimEnd - fo, R.trimEnd].filter((t) => t > off).sort((a, b) => a - b)
+    .forEach((t) => param.linearRampToValueAtTime(env(t), t0 + t - off));
+}
+function play() {
+  if (!buffer) return;
+  ensureCtx(); stopSource();
+  const R = state.recording; let off = ui.pos;
+  if (off < R.trimStart || off >= R.trimEnd - 0.02) off = R.trimStart;
+  const src = ctx.createBufferSource(); src.buffer = buffer;
+  const fade = ctx.createGain(), raw = ctx.createGain(), proc = ctx.createGain(), nr = ctx.createBiquadFilter();
+  src.connect(fade); fade.connect(raw); raw.connect(master); proc.connect(master);
+  nr.type = "highshelf"; nr.frequency.value = 4000; nr.gain.value = nrDb(); nr.connect(proc);
+  const stemG = {};
+  if (sepDone()) STEMS.forEach((n) => {
+    const [i, o] = stemFilters(ctx, n), g = ctx.createGain(); g.gain.value = stemGainValue(n);
+    fade.connect(i); o.connect(g); g.connect(nr); stemG[n] = g;
+  });
+  else fade.connect(nr);
+  raw.gain.value = processed() ? 0 : 1; proc.gain.value = processed() ? 1 : 0;
+  const t0 = ctx.currentTime + 0.02;
+  scheduleFades(fade.gain, off, t0);
+  src.start(t0, off, R.trimEnd - off);
+  src.onended = () => {
+    if (!G || G.src !== src) return;
+    G = null; ui.pos = state.recording.trimStart;
+    if (state.transport.loop) play(); else { ui.playing = false; render(); }
+  };
+  G = { src, raw, proc, nr, stemG }; startCtx = t0; startOff = off; ui.playing = true;
+}
+function stopSource() { if (G) { const s = G.src; G = null; try { s.stop(); } catch (e) {} } }
+function pause() { ui.pos = curPos(); stopSource(); ui.playing = false; }
+const curPos = () => (ui.playing && ctx ? clamp(startOff + (ctx.currentTime - startCtx), startOff, state.recording.trimEnd) : ui.pos);
+function restartIfPlaying() { if (ui.playing) { ui.pos = curPos(); play(); } }
+function applyLive() {
+  if (!ctx) return;
+  const t = ctx.currentTime, k = 0.02;
+  master.gain.setTargetAtTime(state.transport.masterVolume / 100, t, k);
+  if (!G) return;
+  G.raw.gain.setTargetAtTime(processed() ? 0 : 1, t, k);
+  G.proc.gain.setTargetAtTime(processed() ? 1 : 0, t, k);
+  G.nr.gain.setTargetAtTime(nrDb(), t, k);
+  for (const n in G.stemG) G.stemG[n].gain.setTargetAtTime(stemGainValue(n), t, k);
+}
+// "Load sample": a synthetic 16 s song (bass, chord pad, slightly off-key voice, hats, kick, hiss)
+function makeSample() {
+  ensureCtx(); stopSource(); ui.playing = false;
+  const sr = ctx.sampleRate, len = sr * 16, b = ctx.createBuffer(2, len, sr), L = b.getChannelData(0), Rc = b.getChannelData(1);
+  const r = rng(5), mtof = (m) => 440 * Math.pow(2, (m - 69) / 12), TAU = Math.PI * 2;
+  const chords = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]];
+  const mel = [69, 72, 76, 74, 72, 71, 69, 67, 69, 72, 74, 76, 77, 76, 74, 72], off = mel.map(() => (r() - 0.5) * 0.7);
+  let pB = 0, pV = 0, pP = [0, 0, 0], prevN = 0;
+  for (let i = 0; i < len; i++) {
+    const t = i / sr, ch = chords[Math.floor(t / 2) % 4];
+    pB += (TAU * mtof(ch[0] - 24)) / sr;
+    const bass = 0.28 * Math.sin(pB) * (0.6 + 0.4 * Math.exp(-(t % 0.5) * 6));
+    let pad = 0; for (let k = 0; k < 3; k++) { pP[k] += (TAU * mtof(ch[k])) / sr; pad += 0.045 * (Math.sin(pP[k]) + 0.3 * Math.sin(2 * pP[k])); }
+    const ni = Math.floor(t / 0.5) % 16, nt = t % 0.5;
+    pV += (TAU * mtof(mel[ni] + off[ni] + 0.15 * Math.sin(TAU * 5.5 * t))) / sr;
+    const voice = 0.17 * Math.min(1, nt * 25) * (0.7 + 0.3 * Math.exp(-nt * 3)) * (Math.sin(pV) + 0.45 * Math.sin(2 * pV) + 0.2 * Math.sin(3 * pV));
+    const n = r() * 2 - 1, hat = 0.14 * Math.exp(-(t % 0.25) * 60) * (n - prevN); prevN = n;
+    const tk = t % 1, kick = 0.5 * Math.exp(-tk * 12) * Math.sin(TAU * (50 * tk + 3.5 * (1 - Math.exp(-20 * tk))));
+    const s = 0.8 * (bass + pad + voice + hat + kick + 0.012 * n);
+    L[i] = s; Rc[i] = s;
+  }
+  buffer = b; setRecording("sample-test-song.wav");
+}
+
+// ================= Pieces =================
+const ICON = {
+  import: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M12 11v5M9.5 13.5 12 16l2.5-2.5"/>',
+  separate: '<path d="M3 12h6M9 12l5-6h7M9 12l5 6h7M14 12h7"/>',
+  mixer: '<path d="M6 4v16M12 4v16M18 4v16"/><rect x="4" y="13" width="4" height="3" rx="1"/><rect x="10" y="7" width="4" height="3" rx="1"/><rect x="16" y="11" width="4" height="3" rx="1"/>',
+  effects: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  export: '<path d="M12 15V3M7 8l5-5 5 5M4 15v6h16v-6"/>',
+};
+const CHEV = '<svg viewBox="0 0 12 12"><path d="M4 2l4 4-4 4"/></svg>';
+function range(path, min, max, step, dis = "") {
+  const v = get(path);
+  return `<input type="range" data-bind="${path}" min="${min}" max="${max}" step="${step}" value="${v}" ${dis}><output data-out="${path}">${fmtVal(path, v)}</output>`;
+}
+const ctl = (label, path, min, max, step, dis) => `<label class="ctl"><span>${label}</span>${range(path, min, max, step, dis)}</label>`;
+const sw = (path, dis = "") => `<label class="switch"><input type="checkbox" data-bind="${path}" ${get(path) ? "checked" : ""} ${dis}><span></span></label>`;
+const select = (path, opts, dis = "") => `<select data-bind="${path}" ${dis}>${opts.map((o) => `<option ${get(path) === o ? "selected" : ""}>${o}</option>`).join("")}</select>`;
+function sepEta() { const left = (1 - state.separation.progress / 100) * 5.5; return left < 1 ? "less than a minute left" : `about ${Math.ceil(left)} min left`; }
+function sepBlock() {
+  const s = state.separation;
+  if (s.status === "done") return `<span class="ok">✓ Separation done — 4 Stems</span>`;
+  if (s.status === "running") return `<div style="width:240px"><div class="bar"><div data-sep-bar style="width:${s.progress}%"></div></div>
+    <div class="dim" data-sep-text>Separating… ${s.progress}% · ${sepEta()}</div></div>`;
+  return `<button class="btn primary" data-act="separate" ${loaded() ? "" : "disabled"}>Separate into Stems</button>`;
+}
+function ruler() {
+  const D = state.recording.durationSec, stepS = [1, 2, 5, 10, 15, 30, 60].find((s) => D / s <= 12) || 120;
+  let h = ""; for (let t = 0; t <= D; t += stepS) { const x = (t / D) * 100; h += `<div class="tk" style="left:${x}%"></div><div class="tl" style="left:${x}%">${fmtS(t)}</div>`; }
+  return `<div class="ruler" data-seek>${h}<div class="playhead"></div></div>`;
+}
+
+// ================= Pitch Correction visual =================
+function pitchSVG() {
+  const pc = state.pitchCorrection, root = NOTE.indexOf(pc.key.root), inKey = SCALE[pc.key.scale].map((s) => (root + s) % 12);
+  const W = 600, H = 200, rowH = H / 12, y = (p) => H - (p + 0.5) * rowH;
+  let g = "";
+  for (let i = 0; i < 12; i++) {
+    const on = inKey.includes(i);
+    g += `<line x1="26" x2="${W}" y1="${y(i)}" y2="${y(i)}" stroke="${on ? "#343c4c" : "#1b2029"}"/>`;
+    if (on) g += `<text x="4" y="${y(i) + 4}" font-size="10" fill="#8b93a1">${NOTE[i]}</text>`;
+  }
+  const nearest = (v) => { let best = 0, bd = 99; for (let k = -1; k <= 12; k++) { if (!inKey.includes(((k % 12) + 12) % 12)) continue; const d = Math.abs(k - v); if (d < bd) { bd = d; best = k; } } return best; };
+  const r = rng(99), N = 12, w = (W - 34) / N, amt = pc.amount / 100, glide = pc.retuneMs / 400, hum = pc.humanize / 100, vib = pc.vibrato / 100, mix = pc.mix / 100;
+  let p = 5, rawPts = "", out = "";
+  for (let i = 0; i < N; i++) {
+    p = clamp(p + Math.round((r() - 0.5) * 4) + (r() - 0.5) * 0.9, 0.6, 10.4);
+    const tgt = nearest(p), tgtH = tgt + (p - tgt) * hum * 0.6; let a = "", b = "";
+    for (let s = 0; s <= 16; s++) {
+      const x = s / 16, wob = 0.22 * Math.sin(Math.PI * 4 * x + i), raw = p + wob;
+      const gl = glide <= 0 ? 1 : Math.min(1, x / glide);
+      const wet = p + (tgtH - p) * gl * amt + wob * vib, fin = pc.enabled ? raw + (wet - raw) * mix : raw;
+      const px = 34 + i * w + x * w * 0.86;
+      a += `${px},${y(raw)} `; b += `${px},${y(fin)} `;
+    }
+    rawPts += `<polyline points="${a}" fill="none" stroke="#5d6573" stroke-width="1.5" stroke-dasharray="3 3"/>`;
+    out += `<polyline points="${b}" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:150px;display:block">${g}${rawPts}${out}</svg>`;
+}
+function pcPresetArea() {
+  const pc = state.pitchCorrection, names = [...Object.keys(PC_PRESETS), ...Object.keys(pc.savedPresets)];
+  const chips = names.map((n) => `<button class="chip ${pc.preset === n ? "on" : ""}" data-act="preset" data-arg="${n}">${n}</button>`).join("");
+  return `<div class="row">${chips}${pc.preset === "Custom" ? `<span class="chip custom on">Custom •</span>` : ""}</div>
+    <div class="row">${pc.preset === "Custom" ? `<button class="link" data-act="resetPreset">Reset to ${pc.basedOn}</button><span class="grow"></span>` : ""}
+      ${ui.saving ? `<div class="save grow"><input id="presetName" placeholder="Name your Preset" maxlength="24"><button class="btn" data-act="savePreset">Save</button><button class="link" data-act="cancelSave">Cancel</button></div>`
+        : `<button class="link" data-act="startSave">Save preset…</button>`}</div>`;
+}
+
+// ================= Render =================
+function renderRail() {
+  const b = (act, icon, tip, on, dis) => `<button data-act="${act}" data-tip="${tip}" class="${on ? "on" : ""}" ${dis ? "disabled" : ""}><svg viewBox="0 0 24 24">${ICON[icon]}</svg></button>`;
+  const mac = /Mac/.test(navigator.platform), mod = mac ? "Cmd" : "Ctrl", u = hist.undo.at(-1), r = hist.redo.at(-1);
+  const hb = (act, glyph, e, tip) => `<button class="hist" data-act="${act}" data-tip="${e ? tip : "Nothing to " + act}" ${e ? "" : "disabled"}>${glyph}</button>`;
+  return hb("undo", "↶", u, u && `Undo ${u.label} (${mod}+Z)`) + hb("redo", "↷", r, r && `Redo ${r.label} (${mod}+Shift+Z)`) + `<div class="rail-sep"></div>`
+    + b("pick", "import", "Import — open a Recording") + b("separate", "separate", "Separate — split into 4 Stems", false, !loaded() || state.separation.status !== "idle")
+    + b("mixer", "mixer", "Mixer — jump to the Stem lanes", false, !loaded()) + b("effects", "effects", "Effects — show/hide the Properties panel", ui.panel)
+    + b("exportPanel", "export", "Export — Mixdown settings", false, !loaded());
+}
+function renderMain() {
+  if (!loaded()) return `<div style="max-width:640px;margin:8vh auto">
+    <div class="drop" data-act="pick"><h2>Drop your Recording here</h2><p class="muted">or click to choose an audio file. It's decoded locally in your browser; nothing is uploaded.</p></div>
+    <p style="text-align:center;margin-top:16px"><button class="btn" data-act="sample">Load sample</button> <span class="dim">generates a short synthetic test song</span></p></div>`;
+  const R = state.recording;
+  const lanes = STEMS.map((n) => {
+    const st = state.stems[n], d = lock();
+    return `<div class="lane ${audible(n) && sepDone() ? "" : "off"}"><div class="lh">
+        <div class="t"><span class="dot" style="background:${COL[n]}"></span>${n}<span class="grow"></span>
+          <button class="ms ${st.mute ? "on" : ""}" data-act="mute" data-arg="${n}" ${d} title="Mute">M</button>
+          <button class="ms solo ${st.solo ? "on" : ""}" data-act="solo" data-arg="${n}" ${d} title="Solo">S</button></div>
+        <div class="fader">${range("stems." + n + ".level", -24, 12, 1, d)}</div></div>
+      <div class="lw"><div class="wavebox" data-seek>${sepDone() ? (stemPeaks[n] ? `<canvas data-wave="${n}"></canvas>` : `<div class="empty">rendering…</div>`)
+        : `<div class="empty">${n} Stem appears after Separation</div>`}<div class="playhead"></div></div></div></div>`;
+  }).join("");
+  return `<div class="mhead"><div><div class="sc">Recording</div><span class="name">${R.name}</span>
+      <span class="dim">${fmtMs(R.durationSec)} · ${buffer.sampleRate / 1000} kHz · ${buffer.numberOfChannels === 1 ? "mono" : "stereo"}</span></div>
+      <button class="link" data-act="pick">Replace…</button><span class="grow"></span>${sepBlock()}
+      <button class="btn primary" data-act="export">Export Mixdown</button></div>
+    <div class="lane"><div class="lh"><div class="t"><span class="dot" style="background:var(--accent)"></span>Recording</div>
+        <div class="dim" data-trimlabel></div><div class="dim" data-fadelabel></div>
+        <div class="dim">Drag the bars to Trim, the ▼ corners to fade. Click to move the playhead.</div></div>
+      <div class="lw">${ruler()}<div class="wavebox rec" id="recBox" data-seek><canvas data-wave="rec"></canvas>
+        <div class="shade sl"></div><div class="shade sr"></div><svg class="fades" viewBox="0 0 1000 100" preserveAspectRatio="none"></svg>
+        <div class="h trim l" data-drag="trimStart" title="Trim start"></div><div class="h trim r" data-drag="trimEnd" title="Trim end"></div>
+        <div class="h fade" data-drag="fadeIn" title="Fade in"></div><div class="h fade" data-drag="fadeOut" title="Fade out"></div>
+        <div class="playhead"></div></div></div></div>
+    <div class="row" id="stems" style="margin:14px 0 8px"><span class="sc">Stems</span><span class="grow"></span></div>
+    ${sepDone() ? "" : `<div class="hint" style="margin-bottom:8px">Stem controls unlock after Separation. Separation splits your Recording into vocals, drums, bass and other; in the real app it takes 3–8 minutes.</div>`}
+    ${lanes}
+    <div class="note">Prototype only: Stems are faked with simple filters on the Recording (vocals 300–3400 Hz, bass below 180 Hz, drums above 5 kHz, other a wide mid band). The faders, Mute and Solo really change what you hear.</div>`;
+}
+function acc(id, title, badge, body) {
+  const open = ui.acc[id];
+  return `<section class="acc ${open ? "open" : ""}" id="acc-${id}"><button class="acc-h" data-act="acc" data-arg="${id}">${CHEV}<span class="sc">${title}</span>${badge}</button>${open ? `<div class="acc-b">${body}</div>` : ""}</section>`;
+}
+function renderPanel() {
+  const pc = state.pitchCorrection, vb = state.vocalBoost;
+  return `<div class="ph"><span class="sc" style="color:var(--ink)">Properties</span><span class="dim">Effects</span></div>`
+    + acc("nr", "Noise Reduction", `<output data-out="noiseReduction.amount">${state.noiseReduction.amount}%</output>`,
+      `${ctl("Amount", "noiseReduction.amount", 0, 100, 1)}<div class="dim">Less keeps some natural room sound.</div>
+       <div class="note">Prototype: faked with a high-shelf cut, not real Noise Reduction.</div>`)
+    + acc("vb", "Vocal Boost", `<output data-out="vocalBoost.db">${fmtVal("vocalBoost.db", vb.db)}</output>`,
+      `<div class="row">${sw("vocalBoost.auto", lock())}<span>Automatic</span><span class="dim">(+4 dB)</span></div>
+       ${ctl("Boost", "vocalBoost.db", 0, 12, 1, lock())}
+       ${sepDone() ? "" : `<div class="hint">Vocal Boost works on the vocals Stem, so it needs Separation first.</div>`}`)
+    + acc("pc", "Pitch Correction", `<output>${pc.enabled ? pc.preset : "off"}</output>`,
+      `<div class="row">${sw("pitchCorrection.enabled")}<span>Pitch Correction</span></div>
+       <div class="sc" style="font-size:12px">Pitch Correction Preset</div><div id="pcPresets" style="display:flex;flex-direction:column;gap:6px">${pcPresetArea()}</div>
+       <div class="row"><span class="muted" style="width:118px">Key</span>${select("pitchCorrection.key.root", NOTE)}${select("pitchCorrection.key.scale", Object.keys(SCALE))}
+         ${pc.key.detected ? `<span class="dim">(detected)</span>` : `<button class="link" data-act="keyDetected">use detected</button>`}</div>
+       ${ctl("Retune Speed", "pitchCorrection.retuneMs", 0, 400, 5)}<div class="dim" style="margin-top:-8px">Lower = harder, more robotic.</div>
+       ${ctl("Humanize", "pitchCorrection.humanize", 0, 100, 1)}
+       ${ctl("Correction Amount", "pitchCorrection.amount", 0, 100, 1)}
+       ${ctl("Vibrato preserve", "pitchCorrection.vibrato", 0, 100, 1)}
+       <div class="ctl"><span>Formant preserve</span><div>${sw("pitchCorrection.formant")}</div><span></span></div>
+       ${ctl("Mix (dry/wet)", "pitchCorrection.mix", 0, 100, 1)}
+       <div class="pviz" id="pitchViz">${pitchSVG()}</div>
+       <div class="dim">dashed = as sung · violet = after Pitch Correction (${pc.key.root} ${pc.key.scale})</div>
+       <div class="note">Prototype: Pitch Correction isn't audible yet; only this picture responds.</div>`)
+    + acc("mix", "Mixdown", `<output>${state.export.format.split(" ")[0]}</output>`,
+      `<label class="ctl"><span>Format</span>${select("export.format", FORMATS)}<span></span></label>
+       <label class="ctl"><span>Loudness</span>${select("export.loudness", LOUDNESS)}<span></span></label>
+       <button class="btn primary" data-act="export" ${loaded() ? "" : "disabled"}>Export Mixdown</button>`);
+}
+function renderTransport() {
+  const d = loaded() ? "" : "disabled";
+  const PLAY = '<svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5z"/></svg>', PAUSE = '<svg viewBox="0 0 16 16"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+  return `<button class="tbtn play" data-act="play" ${d} title="Play / Pause (Space)">${ui.playing ? PAUSE : PLAY}</button>
+    <button class="tbtn" data-act="stop" ${d} title="Stop"><svg viewBox="0 0 16 16"><path d="M3.5 3.5h9v9h-9z"/></svg></button>
+    <button class="tbtn ${state.transport.loop ? "on" : ""}" data-act="loop" ${d} title="Loop the Trim range"><svg viewBox="0 0 16 16"><path d="M4 5h7l-2-2 1-1 4 3.5L10 9 9 8l2-2H4.5A1.5 1.5 0 0 0 3 7.5V9H1.5V7.5A2.5 2.5 0 0 1 4 5zm8 6H5l2 2-1 1-4-3.5L6 7l1 1-2 2h6.5A1.5 1.5 0 0 0 13 8.5V7h1.5v1.5A2.5 2.5 0 0 1 12 11z"/></svg></button>
+    <span class="clock" data-time>${fmtMs(ui.pos)}</span><span class="dim num">/ ${fmtMs(state.recording.durationSec)}</span>
+    <span class="grow"></span>
+    <div class="vol"><span class="sc">Master</span>${range("transport.masterVolume", 0, 100, 1)}</div>
+    <div class="seg"><button class="${!processed() ? "on" : ""}" data-act="ab" data-arg="original">A · Original</button><button class="${processed() ? "on" : ""}" data-act="ab" data-arg="processed">B · Processed</button></div>`;
+}
+function render() {
+  $("#shell").classList.toggle("nopanel", !ui.panel);
+  $("#rail").innerHTML = renderRail(); $("#main").innerHTML = renderMain();
+  $("#panel").innerHTML = renderPanel(); $("#transport").innerHTML = renderTransport();
+  drawWaves(); updateTrim(); updatePlayheads(); updateState();
+}
+function drawWaves() {
+  $$("canvas[data-wave]").forEach((cv) => {
+    const key = cv.dataset.wave, p = key === "rec" ? recPeaks : stemPeaks[key]; if (!p) return;
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; cv.width = w * dpr; cv.height = h * dpr;
+    const g = cv.getContext("2d"); g.scale(dpr, dpr);
+    let gain = 1, color = processed() ? "#a78bfa" : "#6b7280";
+    if (key !== "rec") { const a = audible(key); gain = a ? Math.min(2.5, stemGainValue(key)) * 0.9 : 0.15; color = a ? COL[key] : "#3a3f4a"; }
+    g.fillStyle = "#232833"; g.fillRect(0, h / 2, w, 1); g.fillStyle = color;
+    for (let x = 0; x < w; x++) {
+      const i0 = Math.floor((x / w) * p.length), i1 = Math.max(i0 + 1, Math.floor(((x + 1) / w) * p.length)); let m = 0;
+      for (let i = i0; i < i1; i++) if (p[i] > m) m = p[i];
+      const bh = Math.max(1, Math.min(1, m * gain) * h * 0.92); g.fillRect(x, h / 2 - bh / 2, 1, bh);
+    }
+  });
+}
+function updateTrim() {
+  const box = $("#recBox"); if (!box) return;
+  const R = state.recording, D = R.durationSec, pc = (t) => (t / D) * 100 + "%", x = (t) => (t / D) * 1000;
+  box.querySelector(".sl").style.width = pc(R.trimStart);
+  box.querySelector(".sr").style.left = pc(R.trimEnd); box.querySelector(".sr").style.right = "0";
+  box.querySelector(".trim.l").style.left = pc(R.trimStart); box.querySelector(".trim.r").style.left = pc(R.trimEnd);
+  box.querySelector('[data-drag="fadeIn"]').style.left = pc(R.trimStart + R.fadeIn);
+  box.querySelector('[data-drag="fadeOut"]').style.left = pc(R.trimEnd - R.fadeOut);
+  const s = x(R.trimStart), e = x(R.trimEnd), fi = x(R.trimStart + R.fadeIn), fo = x(R.trimEnd - R.fadeOut);
+  box.querySelector(".fades").innerHTML = `<polygon points="${s},0 ${fi},0 ${s},100" fill="rgba(0,0,0,.5)"/><polygon points="${fo},0 ${e},0 ${e},100" fill="rgba(0,0,0,.5)"/>
+    <line x1="${s}" y1="100" x2="${fi}" y2="0" stroke="#f0f0f5" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    <line x1="${fo}" y1="0" x2="${e}" y2="100" stroke="#f0f0f5" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
+  $$("[data-trimlabel]").forEach((el) => (el.textContent = `Trim ${fmtMs(R.trimStart)} – ${fmtMs(R.trimEnd)} (${(R.trimEnd - R.trimStart).toFixed(1)} s)`));
+  $$("[data-fadelabel]").forEach((el) => (el.textContent = `Fade in ${R.fadeIn.toFixed(1)} s · fade out ${R.fadeOut.toFixed(1)} s`));
+}
+function updatePlayheads() {
+  const D = state.recording.durationSec || 1, pos = curPos();
+  $$(".playhead").forEach((el) => (el.style.left = (pos / D) * 100 + "%"));
+  $$("[data-time]").forEach((el) => (el.textContent = fmtMs(pos)));
+}
+const updateState = () => {
+  const last10 = (a) => a.slice(-10).map((e) => e.label);
+  $("#stateJson").textContent = JSON.stringify({ ...state, history: { undo: last10(hist.undo), redo: last10(hist.redo) } }, null, 2);
+  if ($("#rail") && typeof renderRail === "function") $("#rail").innerHTML = renderRail(); // keep Undo/Redo enabled-state fresh
+};
+let toastTimer;
+function toast(msg, ms = 3200) { const el = $("#toast"); el.textContent = msg; el.hidden = false; el.classList.toggle("subtle", ms < 2000); clearTimeout(toastTimer); toastTimer = setTimeout(() => (el.hidden = true), ms); }
+
+// ================= Actions =================
+function separate() {
+  if (state.separation.status !== "idle" || !loaded()) return;
+  state.separation.status = "running"; state.separation.progress = 0; render();
+  const stemsReady = renderStems(); let ticks = 0;
+  sepTimer = setInterval(() => {
+    ticks++; state.separation.progress = Math.min(100, Math.round((ticks / 60) * 100));
+    if (ticks >= 60) {
+      clearInterval(sepTimer); state.separation.status = "done"; render(); restartIfPlaying();
+      stemsReady.then(() => { if (sepDone()) render(); }); return;
+    }
+    $$("[data-sep-bar]").forEach((el) => (el.style.width = state.separation.progress + "%"));
+    $$("[data-sep-text]").forEach((el) => (el.textContent = `Separating… ${state.separation.progress}% · ${sepEta()}`));
+    updateState();
+  }, 100);
+}
+function applyPreset(name) {
+  const pc = state.pitchCorrection, vals = PC_PRESETS[name] || pc.savedPresets[name];
+  Object.assign(pc, vals); pc.preset = name; pc.basedOn = name; pc.enabled = true;
+}
+const ACTIONS = {
+  pick: () => $("#file").click(),
+  sample: makeSample,
+  separate,
+  mixer: () => $("#stems") && $("#stems").scrollIntoView({ behavior: "smooth" }),
+  effects: () => { ui.panel = !ui.panel; render(); },
+  exportPanel: () => { ui.panel = true; ui.acc.mix = true; render(); $("#acc-mix").scrollIntoView({ behavior: "smooth" }); },
+  export: () => { const f = state.export.format; toast(`Mixdown ready: my-song-enhanced.${f.startsWith("WAV") ? "wav" : f.startsWith("AAC") ? "m4a" : "mp3"}`); },
+  play: () => { if (ui.playing) pause(); else play(); render(); },
+  stop: () => { stopSource(); ui.playing = false; ui.pos = state.recording.trimStart; render(); },
+  loop: () => { state.transport.loop = !state.transport.loop; render(); },
+  ab: (v) => { state.ab = v; applyLive(); render(); },
+  mute: (n) => { state.stems[n].mute = !state.stems[n].mute; commit(cap(n) + " mute"); applyLive(); render(); },
+  solo: (n) => { state.stems[n].solo = !state.stems[n].solo; commit(cap(n) + " solo"); applyLive(); render(); },
+  undo, redo,
+  acc: (id) => { ui.acc[id] = !ui.acc[id]; render(); },
+  preset: (n) => { applyPreset(n); commit("Pitch preset → " + n); render(); },
+  resetPreset: () => { applyPreset(state.pitchCorrection.basedOn); commit("Reset to " + state.pitchCorrection.basedOn); render(); },
+  startSave: () => { ui.saving = true; render(); $("#presetName").focus(); },
+  cancelSave: () => { ui.saving = false; render(); },
+  savePreset: () => {
+    const name = $("#presetName").value.trim(), pc = state.pitchCorrection; if (!name) return;
+    pc.savedPresets[name] = Object.fromEntries(PC_FIELDS.map((k) => [k, pc[k]]));
+    pc.preset = name; pc.basedOn = name; absorb(); ui.saving = false; render(); toast(`Saved Pitch Correction Preset “${name}”`);
+  },
+  keyDetected: () => { Object.assign(state.pitchCorrection.key, { root: "A", scale: "minor", detected: true }); commit("Key → detected"); render(); },
+};
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (el && !el.disabled && ACTIONS[el.dataset.act]) ACTIONS[el.dataset.act](el.dataset.arg);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id === "presetName") ACTIONS.savePreset();
+  const typing = e.target.tagName === "INPUT" && e.target.type === "text";
+  if ((e.ctrlKey || e.metaKey) && !typing) {
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); redo(); return; }
+  }
+  if (e.code === "Space" && loaded() && !/INPUT|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); ACTIONS.play(); }
+});
+
+// Live input: update state, readouts and audio without re-rendering (keeps slider drags smooth)
+document.addEventListener("input", (e) => {
+  const el = e.target, path = el.dataset.bind; if (!path) return;
+  const v = el.type === "checkbox" ? el.checked : el.type === "range" ? Number(el.value) : el.value;
+  set(path, v);
+  const pc = state.pitchCorrection, field = path.split(".")[1];
+  if (path === "vocalBoost.db") state.vocalBoost.auto = false;
+  if (path === "vocalBoost.auto" && v) state.vocalBoost.db = 4;
+  if (path.startsWith("pitchCorrection.key.")) pc.key.detected = false;
+  if (path.startsWith("pitchCorrection.") && PC_FIELDS.includes(field)) { pc.preset = "Custom"; $("#pcPresets").innerHTML = pcPresetArea(); }
+  if (path.startsWith("pitchCorrection.") && $("#pitchViz")) $("#pitchViz").innerHTML = pitchSVG();
+  $$(`[data-out="${path}"]`).forEach((o) => (o.textContent = fmtVal(path, v)));
+  applyLive(); updateState();
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id === "file") { loadFile(e.target.files[0]); e.target.value = ""; return; }
+  const path = e.target.dataset.bind; if (!path) return;
+  if (!path.startsWith("transport.")) commit(labelFor(path)); // a whole slider drag ends here = one step
+  render();
+});
+
+// Dragging Trim/fade handles, and click-or-scrub to seek
+let drag = null, scrub = null;
+function timeAt(e, rect) { return clamp((e.clientX - rect.left) / rect.width, 0, 1) * state.recording.durationSec; }
+document.addEventListener("pointerdown", (e) => {
+  const h = e.target.closest("[data-drag]");
+  if (h) { drag = { key: h.dataset.drag, rect: $("#recBox").getBoundingClientRect() }; e.preventDefault(); return; }
+  const s = e.target.closest("[data-seek]");
+  if (s && loaded()) { scrub = { rect: s.getBoundingClientRect(), was: ui.playing }; if (ui.playing) pause(); ui.pos = timeAt(e, scrub.rect); updatePlayheads(); e.preventDefault(); }
+});
+document.addEventListener("pointermove", (e) => {
+  if (drag) {
+    const R = state.recording, t = timeAt(e, drag.rect), len = R.trimEnd - R.trimStart;
+    if (drag.key === "trimStart") { R.trimStart = r2(clamp(t, 0, R.trimEnd - 0.5)); }
+    if (drag.key === "trimEnd") { R.trimEnd = r2(clamp(t, R.trimStart + 0.5, R.durationSec)); }
+    if (drag.key === "fadeIn") R.fadeIn = r2(clamp(t - R.trimStart, 0, len - R.fadeOut));
+    if (drag.key === "fadeOut") R.fadeOut = r2(clamp(R.trimEnd - t, 0, len - R.fadeIn));
+    const nl = R.trimEnd - R.trimStart; if (R.fadeIn + R.fadeOut > nl) { R.fadeIn = r2(Math.min(R.fadeIn, nl / 2)); R.fadeOut = r2(Math.min(R.fadeOut, nl - R.fadeIn)); }
+    updateTrim(); updateState();
+  } else if (scrub) { ui.pos = timeAt(e, scrub.rect); updatePlayheads(); }
+});
+document.addEventListener("pointerup", () => {
+  if (drag) { commit(LABELS[drag.key]); drag = null; restartIfPlaying(); render(); }
+  if (scrub) { const was = scrub.was; scrub = null; if (was) { play(); render(); } }
+});
+// Drop a real audio file anywhere on the page
+document.addEventListener("dragover", (e) => { e.preventDefault(); $$(".drop").forEach((d) => d.classList.add("over")); });
+document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $$(".drop").forEach((d) => d.classList.remove("over")); });
+document.addEventListener("drop", (e) => { e.preventDefault(); $$(".drop").forEach((d) => d.classList.remove("over")); loadFile(e.dataTransfer.files[0]); });
+window.addEventListener("resize", drawWaves);
+
+// Playhead follows the AudioContext clock
+(function tick() { if (ui.playing) updatePlayheads(); requestAnimationFrame(tick); })();
+render();
+</script>
+</body>
+</html>
