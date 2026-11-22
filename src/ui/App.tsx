@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Chevron, Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon } from "./icons";
+import { KeyControl } from "./KeyControl";
 import { MixdownPanel, useMixdownExport } from "./MixdownPanel";
 import { RecordingLane } from "./RecordingLane";
 import { fmtClock, fmtShort, usePosition, useStudio } from "./useStudio";
@@ -194,11 +195,15 @@ export function App() {
 
         <aside className="panel" aria-label="Properties">
           <div className="ph sc">Properties</div>
-          {["Noise Reduction", "Vocal Boost", "Pitch Correction"].map((title) => (
+          {["Noise Reduction", "Vocal Boost"].map((title) => (
             <PanelSection key={title} title={title}>
               <div className="dim">Coming soon.</div>
             </PanelSection>
           ))}
+          <PanelSection title="Pitch Correction">
+            <KeyControl studio={studio} state={state} />
+            <div className="dim">Presets and correction controls are coming soon.</div>
+          </PanelSection>
           <PanelSection title="Mixdown">
             <MixdownPanel studio={studio} state={state} exporter={exporter} />
           </PanelSection>

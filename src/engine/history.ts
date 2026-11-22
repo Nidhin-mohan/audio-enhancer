@@ -45,6 +45,15 @@ export function createHistory<T>(initial: T) {
       baseline = copy(step.snapshot);
       return copy(step.snapshot);
     },
+    /**
+     * Apply a non-undoable correction to every recorded state (e.g. a detected Key
+     * arriving after the user already made edits), so undo never brings back stale data.
+     */
+    rewrite(fix: (snapshot: T) => T) {
+      baseline = fix(copy(baseline));
+      undo = undo.map((s) => ({ ...s, snapshot: fix(copy(s.snapshot)) }));
+      redo = redo.map((s) => ({ ...s, snapshot: fix(copy(s.snapshot)) }));
+    },
     /** Forget all steps and start again from `current`. */
     reset(current: T) {
       undo = [];

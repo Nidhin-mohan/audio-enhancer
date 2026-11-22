@@ -4,10 +4,18 @@
 import { aacSupported } from "./encoders";
 import { renderRecording, scheduleRecording, type Trim } from "./graph";
 import { createHistory, type HistoryLabels } from "./history";
+import type { DetectedKey, NoteName, Scale } from "./key";
 import { MIXDOWN_EXTENSION, type MixdownFormat, type MixdownLoudness } from "./mixdown";
 import type { MixdownWorkerMessage } from "./mixdown.worker";
 
-export type { HistoryLabels, MixdownFormat, MixdownLoudness, Trim };
+export type { DetectedKey, HistoryLabels, MixdownFormat, MixdownLoudness, NoteName, Scale, Trim };
+
+/** The Key Pitch Correction snaps to; `detected` is true while it follows the detected Key. */
+export interface MixKey {
+  root: NoteName;
+  scale: Scale;
+  detected: boolean;
+}
 
 export interface MixdownSettings {
   format: MixdownFormat;
@@ -27,6 +35,7 @@ export interface RecordingInfo {
 /** The user's choices that decide how the Mixdown sounds. */
 export interface Mix {
   trim: Trim;
+  key: MixKey;
   mixdown: MixdownSettings;
 }
 
@@ -46,6 +55,8 @@ export interface StudioState {
   cursor: number;
   /** Labels of the undo and redo steps, oldest first. */
   history: HistoryLabels;
+  /** The Recording's Key as detected; null until detection finishes (or if it found no tonal content). */
+  detectedKey: DetectedKey | null;
 }
 
 export interface Studio {
@@ -72,6 +83,10 @@ export interface Studio {
   redo(): void;
   /** Render what the Mix sounds like over the Trim range (the basis of the Mixdown). */
   render(): Promise<AudioBuffer>;
+  /** Override the Key (root and/or scale). */
+  setKey(patch: Partial<Pick<MixKey, "root" | "scale">>): void;
+  /** Go back to following the detected Key. */
+  useDetectedKey(): void;
   setMixdown(patch: Partial<MixdownSettings>): void;
   /** Formats this browser can export (AAC depends on built-in encoder support). */
   supportedMixdownFormats(): Promise<MixdownFormat[]>;
@@ -130,12 +145,18 @@ export function createStudio(): Studio {
 
   let state: StudioState = {
     recording: null,
-    mix: { trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 }, mixdown: { format: "mp3", loudness: -14 } },
+    mix: {
+      trim: { start: 0, end: 0, fadeIn: 0, fadeOut: 0 },
+      key: { root: "C", scale: "major", detected: true },
+      mixdown: { format: "mp3", loudness: -14 },
+    },
     transport: { loop: false, masterVolume: 0.8 },
     playing: false,
     cursor: 0,
     history: { undo: [], redo: [] },
+    detectedKey: null,
   };
+  let loadToken = 0;
   master.gain.value = state.transport.masterVolume;
   const history = createHistory<Mix>(state.mix);
   let buffer: AudioBuffer | null = null;
@@ -213,6 +234,26 @@ export function createStudio(): Studio {
     if (mix) applyMix(mix, { history: history.labels() });
   };
 
+  /** Detect the Key in a worker; when it arrives, every Mix that follows the detected Key adopts it. */
+  const detectKeyInBackground = (decoded: AudioBuffer, token: number) => {
+    const mono = new Float32Array(decoded.length);
+    for (let c = 0; c < decoded.numberOfChannels; c++) {
+      const data = decoded.getChannelData(c);
+      for (let i = 0; i < mono.length; i++) mono[i] += data[i] / decoded.numberOfChannels;
+    }
+    const worker = new Worker(new URL("./key.worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = (e: MessageEvent<DetectedKey | null>) => {
+      worker.terminate();
+      if (token !== loadToken || !e.data) return; // a newer Recording was loaded meanwhile
+      const found = e.data;
+      const adopt = (mix: Mix): Mix => (mix.key.detected ? { ...mix, key: { ...found, detected: true } } : mix);
+      history.rewrite(adopt);
+      setState({ detectedKey: found, mix: adopt(state.mix), history: history.labels() });
+    };
+    worker.onerror = () => worker.terminate();
+    worker.postMessage({ mono, sampleRate: decoded.sampleRate }, [mono.buffer]);
+  };
+
   return {
     async load(file) {
       let decoded: AudioBuffer;
@@ -224,7 +265,11 @@ export function createStudio(): Studio {
       stopSource();
       buffer = decoded;
       offset = 0;
-      const mix: Mix = { ...state.mix, trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 } };
+      const mix: Mix = {
+        ...state.mix,
+        trim: { start: 0, end: decoded.duration, fadeIn: 0, fadeOut: 0 },
+        key: { root: "C", scale: "major", detected: true },
+      };
       history.reset(mix);
       setState({
         recording: { name: file.name, durationSec: decoded.duration },
@@ -232,7 +277,9 @@ export function createStudio(): Studio {
         playing: false,
         cursor: 0,
         history: history.labels(),
+        detectedKey: null,
       });
+      detectKeyInBackground(decoded, ++loadToken);
     },
     getPeaks(count) {
       return buffer ? peaksOf(buffer, count) : [];
@@ -289,6 +336,14 @@ export function createStudio(): Studio {
     async render() {
       if (!buffer) throw new Error("Import a Recording first.");
       return renderRecording(buffer, trim());
+    },
+    setKey(patch) {
+      setState({ mix: { ...state.mix, key: { ...state.mix.key, ...patch, detected: false } } });
+    },
+    useDetectedKey() {
+      const found = state.detectedKey;
+      if (!found) return;
+      setState({ mix: { ...state.mix, key: { ...found, detected: true } } });
     },
     setMixdown(patch) {
       setState({ mix: { ...state.mix, mixdown: { ...state.mix.mixdown, ...patch } } });
