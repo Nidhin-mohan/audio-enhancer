@@ -23,6 +23,11 @@ export const PauseIcon = () => (
 export const StopIcon = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z" /></svg>
 );
+export const LoopIcon = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M17 2l4 4-4 4V7H7a3 3 0 0 0-3 3v1H2v-1a5 5 0 0 1 5-5h10zM7 22l-4-4 4-4v3h10a3 3 0 0 0 3-3v-1h2v1a5 5 0 0 1-5 5H7z" />
+  </svg>
+);
 export const Chevron = () => (
   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
 );

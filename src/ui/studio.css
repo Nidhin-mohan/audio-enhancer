@@ -51,8 +51,26 @@ button, input, select { font: inherit; color: inherit; }
 .ruler { position: relative; height: 20px; border-bottom: 1px solid var(--line2); margin-bottom: 4px; cursor: pointer; overflow: hidden; }
 .ruler .tk { position: absolute; bottom: 0; height: 6px; border-left: 1px solid var(--dim); }
 .ruler .tl { position: absolute; top: 1px; font-size: 10.5px; color: var(--muted); transform: translateX(3px); }
-.wavebox { position: relative; height: 110px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; cursor: text; overflow: hidden; touch-action: none; }
+/* overflow stays visible so the Trim handles at the very edges can be grabbed */
+.wavebox { position: relative; height: 110px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; cursor: text; touch-action: none; }
 .wavebox canvas { width: 100%; height: 100%; display: block; }
+.shade { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.62); pointer-events: none; z-index: 2; }
+.fades { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+.fades polyline { fill: none; stroke: #f0f0f5; stroke-width: 1.5; vector-effect: non-scaling-stroke; opacity: 0.8; }
+.h { position: absolute; z-index: 5; cursor: ew-resize; touch-action: none; }
+.h.trim { top: 0; bottom: 0; width: 14px; margin-left: -7px; }
+.h.trim::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.h.trim::after { content: ""; position: absolute; top: 50%; margin-top: -12px; width: 8px; height: 24px; background: var(--accent); }
+.h.trim.l::after { left: 7px; border-radius: 0 3px 3px 0; }
+.h.trim.r::after { left: -1px; border-radius: 3px 0 0 3px; }
+.h.fade { top: 0; width: 16px; height: 14px; margin-left: -8px; z-index: 6; }
+.h.fade::before { content: ""; position: absolute; left: 2px; top: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 10px solid #f0f0f5; filter: drop-shadow(0 0 3px var(--accent)); }
+.h:hover::before { filter: drop-shadow(0 0 6px #fff); }
+.trim-readout { margin-top: 6px; }
+.tbtn.on { color: var(--accent); box-shadow: var(--glow); }
+.vol { display: flex; align-items: center; gap: 6px; width: 190px; }
+.vol input { accent-color: var(--accent); width: 100%; }
+.grow { flex: 1; }
 .playhead { position: absolute; top: 0; bottom: 0; width: 1.5px; margin-left: -0.75px; background: #ff5c8a; box-shadow: 0 0 8px #ff5c8a; pointer-events: none; z-index: 4; }
 
 /* right panel */

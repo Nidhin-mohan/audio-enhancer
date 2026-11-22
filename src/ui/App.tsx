@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Studio } from "../engine/studio";
-import { Chevron, Icon, PauseIcon, PlayIcon, StopIcon } from "./icons";
+import { Chevron, Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon } from "./icons";
+import { RecordingLane } from "./RecordingLane";
 import { fmtClock, fmtShort, usePosition, useStudio } from "./useStudio";
-import { Waveform } from "./Waveform";
 
 const PEAK_COUNT = 1200;
 
@@ -118,6 +117,7 @@ export function App() {
                 peaks={peaks}
                 duration={recording.durationSec}
                 position={position}
+                trim={state.mix.trim}
               />
             </>
           ) : (
@@ -150,9 +150,30 @@ export function App() {
         <button className="tbtn" aria-label="Stop" disabled={!recording} onClick={() => studio.stop()}>
           <StopIcon />
         </button>
+        <button
+          className={`tbtn${state.transport.loop ? " on" : ""}`}
+          aria-label="Loop"
+          aria-pressed={state.transport.loop}
+          title="Loop the trimmed range"
+          onClick={() => studio.setLoop(!state.transport.loop)}
+        >
+          <LoopIcon />
+        </button>
         <span className="clock num" aria-label="Time">
           {fmtClock(position)} <span className="dim">/ {fmtClock(recording?.durationSec ?? 0)}</span>
         </span>
+        <span className="grow" />
+        <label className="vol" title="Master volume (listening only — doesn't change the Mixdown)">
+          <span className="sc">Vol</span>
+          <input
+            type="range"
+            aria-label="Master volume"
+            min={0}
+            max={100}
+            value={Math.round(state.transport.masterVolume * 100)}
+            onChange={(e) => studio.setMasterVolume(Number(e.target.value) / 100)}
+          />
+        </label>
       </footer>
 
       <input
@@ -183,37 +204,3 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
   );
 }
 
-function RecordingLane(props: { studio: Studio; peaks: number[]; duration: number; position: number }) {
-  const { studio, peaks, duration, position } = props;
-  const seekFromEvent = (e: React.PointerEvent<HTMLElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    studio.seek(((e.clientX - r.left) / r.width) * duration);
-  };
-  const step = duration > 120 ? 30 : duration > 40 ? 10 : duration > 10 ? 2 : 1;
-  const ticks = Array.from({ length: Math.floor(duration / step) + 1 }, (_, i) => i * step);
-  const pct = (t: number) => `${(t / duration) * 100}%`;
-
-  return (
-    <div className="lane">
-      <div className="ruler" onPointerDown={seekFromEvent}>
-        {ticks.map((t) => (
-          <span key={t}>
-            <span className="tk" style={{ left: pct(t) }} />
-            <span className="tl num" style={{ left: pct(t) }}>{fmtShort(t)}</span>
-          </span>
-        ))}
-      </div>
-      <div
-        className="wavebox"
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          seekFromEvent(e);
-        }}
-        onPointerMove={(e) => e.buttons === 1 && seekFromEvent(e)}
-      >
-        <Waveform peaks={peaks} color="#9aa3b2" />
-        <div className="playhead" style={{ left: pct(position) }} />
-      </div>
-    </div>
-  );
-}
