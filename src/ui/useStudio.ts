@@ -1,5 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { createStudio, type Studio } from "../engine/studio";
+import { createStudio, type Studio, type StudioState } from "../engine/studio";
+
+/** The Stems exist, so the Stem mixer and the vocal effects can be used. */
+export const isSeparated = (state: StudioState) => state.separation.status === "done";
 
 /**
  * One Studio engine for the page's lifetime, plus its state as React state.

@@ -1,12 +1,14 @@
 import { useState } from "react";
 import type { NoteName, PitchSettings, Scale, Studio, StudioState } from "../engine/studio";
-import { Locked, Section, Segmented, Slider, Switch } from "./controls";
+import { formatDb, Locked, Section, Segmented, Slider, Switch } from "./controls";
+import { PitchPicture } from "./PitchPicture";
+import { isSeparated } from "./useStudio";
 
 const ROOTS: NoteName[] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 /** One notice at the top of the Effects panel while the Stems don't exist yet. */
 export function EffectsNotice({ studio, state }: { studio: Studio; state: StudioState }) {
-  if (state.separation.status === "done") return null;
+  if (isSeparated(state)) return null;
   const running = state.separation.status === "running";
   return (
     <div className="effects-notice">
@@ -24,12 +26,12 @@ export function EffectsNotice({ studio, state }: { studio: Studio; state: Studio
 }
 
 /** Shown in place of controls that need the Stems (the panel notice explains why). */
-function NeedsStems(_: { studio: Studio; state: StudioState }) {
+function NeedsStems() {
   return <div className="hint-text">Available after Separation.</div>;
 }
 
 export function NoiseReductionSection({ studio, state }: { studio: Studio; state: StudioState }) {
-  const ready = state.separation.status === "done";
+  const ready = isSeparated(state);
   const nr = state.mix.noiseReduction;
   return (
     <Section
@@ -61,18 +63,17 @@ export function NoiseReductionSection({ studio, state }: { studio: Studio; state
           onCommit={() => studio.commit("Noise Reduction")}
         />
       ) : (
-        <NeedsStems studio={studio} state={state} />
+        <NeedsStems />
       )}
     </Section>
   );
 }
 
 export function VocalBoostSection({ studio, state }: { studio: Studio; state: StudioState }) {
-  const ready = state.separation.status === "done";
+  const ready = isSeparated(state);
   const vb = state.mix.vocalBoost;
-  const sign = (db: number) => `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`;
   return (
-    <Section title="Vocal Boost" badge={ready ? `${vb.auto ? "Auto " : ""}${sign(vb.db)}` : undefined}>
+    <Section title="Vocal Boost" badge={ready ? `${vb.auto ? "Auto " : ""}${formatDb(vb.db)}` : undefined}>
       {ready ? (
         <>
           <div className="row-between">
@@ -104,28 +105,46 @@ export function VocalBoostSection({ studio, state }: { studio: Studio; state: St
           />
         </>
       ) : (
-        <NeedsStems studio={studio} state={state} />
+        <NeedsStems />
       )}
     </Section>
   );
 }
 
-const CONTROL_LABELS: Record<Exclude<keyof PitchSettings, "formant">, string> = {
-  retuneMs: "Retune Speed",
-  humanize: "Humanize",
-  amount: "Correction Amount",
-  vibrato: "Vibrato",
-  mix: "Mix",
+type FineTuneControl = Exclude<keyof PitchSettings, "formant">;
+
+/** The Pitch Correction controls, in the order shown. Labels double as undo step names. */
+const FINE_TUNE: { key: FineTuneControl; label: string; max: number; step?: number; unit: string; hint: string }[] = [
+  {
+    key: "retuneMs",
+    label: "Retune Speed",
+    max: 400,
+    step: 5,
+    unit: "ms",
+    hint: "How fast notes snap to pitch. 0 ms is the robotic effect; higher is smoother.",
+  },
+  { key: "amount", label: "Correction Amount", max: 100, unit: "%", hint: "How far off-key notes are moved towards the right note." },
+  { key: "humanize", label: "Humanize", max: 100, unit: "%", hint: "Leaves small, expressive wobbles alone." },
+  { key: "vibrato", label: "Keep Vibrato", max: 100, unit: "%", hint: "Keeps your natural vibrato instead of flattening it." },
+  { key: "mix", label: "Blend", max: 100, unit: "%", hint: "Blend of corrected and original voice." },
+];
+
+const PRESET_HINTS: Record<string, string> = {
+  Natural: "Gentle — barely noticeable",
+  Tight: "Clearly in tune, still human",
+  Hard: "Deliberately robotic — every note snaps instantly",
 };
 
 export function PitchCorrectionSection({ studio, state }: { studio: Studio; state: StudioState }) {
-  const ready = state.separation.status === "done";
+  const ready = isSeparated(state);
   const pc = state.mix.pitchCorrection;
   const [fineTune, setFineTune] = useState(false);
-  const [saving, setSaving] = useState<string | null>(null);
-  const set = (patch: Partial<PitchSettings>) => studio.setPitchCorrection(patch);
+  /** The name being typed for "Save as my Preset", or null when the form is closed. */
+  const [presetDraft, setPresetDraft] = useState<string | null>(null);
   const commit = (label: string) => studio.commit(label);
   const preset = pc.modified ? "Custom" : pc.preset;
+  const draftName = presetDraft?.trim() ?? "";
+  const replaces = state.pitchPresets.some((p) => !p.builtIn && p.name === draftName);
 
   return (
     <Section
@@ -145,157 +164,120 @@ export function PitchCorrectionSection({ studio, state }: { studio: Studio; stat
     >
       <KeyPicker studio={studio} state={state} />
       {!ready ? (
-        <NeedsStems studio={studio} state={state} />
+        <NeedsStems />
       ) : (
-        <fieldset className="plain" disabled={!pc.enabled}>
-          <div className="field-label">Preset</div>
-          <div className="chips" role="radiogroup" aria-label="Pitch Correction Preset">
-            {state.pitchPresets.map((p) => {
-              const on = !pc.modified && pc.preset === p.name;
-              return (
+        <>
+          <PitchPicture studio={studio} state={state} />
+          <fieldset className="plain" disabled={!pc.enabled}>
+            <div className="field-label">Preset</div>
+            <div className="chips" role="radiogroup" aria-label="Pitch Correction Preset">
+              {state.pitchPresets.map((p) => {
+                const on = !pc.modified && pc.preset === p.name;
+                return (
+                  <button
+                    key={p.name}
+                    role="radio"
+                    aria-checked={on}
+                    className={`chip${on ? " on" : ""}`}
+                    title={p.builtIn ? PRESET_HINTS[p.name] : "Your saved Preset"}
+                    onClick={() => {
+                      studio.applyPitchPreset(p.name);
+                      commit(`Pitch preset → ${p.name}`);
+                    }}
+                  >
+                    {p.name}
+                  </button>
+                );
+              })}
+              {pc.modified && <span className="chip on custom" aria-current="true">Custom •</span>}
+            </div>
+            {pc.modified && (
+              <div className="row-gap">
                 <button
-                  key={p.name}
-                  role="radio"
-                  aria-checked={on}
-                  className={`chip${on ? " on" : ""}`}
-                  title={p.builtIn ? PRESET_HINTS[p.name] : "Your saved Preset"}
+                  className="link"
                   onClick={() => {
-                    studio.applyPitchPreset(p.name);
-                    commit(`Pitch preset → ${p.name}`);
+                    studio.resetPitchPreset();
+                    commit(`Reset to ${pc.preset}`);
                   }}
                 >
-                  {p.name}
+                  Reset to {pc.preset}
                 </button>
-              );
-            })}
-            {pc.modified && <span className="chip on custom" aria-current="true">Custom •</span>}
-          </div>
-          {pc.modified && (
-            <div className="row-gap">
-              <button
-                className="link"
-                onClick={() => {
-                  studio.resetPitchPreset();
-                  commit(`Reset to ${pc.preset}`);
+                {presetDraft === null && (
+                  <button className="link" onClick={() => setPresetDraft("")}>Save as my Preset…</button>
+                )}
+              </div>
+            )}
+            {presetDraft !== null && (
+              <form
+                className="save"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!draftName) return;
+                  studio.savePitchPreset(draftName);
+                  setPresetDraft(null);
                 }}
               >
-                Reset to {pc.preset}
-              </button>
-              {saving === null ? (
-                <button className="link" onClick={() => setSaving("")}>Save as my Preset…</button>
-              ) : null}
-            </div>
-          )}
-          {saving !== null && (
-            <form
-              className="save"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!saving.trim()) return;
-                studio.savePitchPreset(saving);
-                setSaving(null);
-              }}
-            >
-              <input
-                type="text"
-                autoFocus
-                aria-label="Preset name"
-                placeholder="Name, e.g. My ballad"
-                value={saving}
-                maxLength={30}
-                onChange={(e) => setSaving(e.target.value)}
-                onKeyDown={(e) => e.key === "Escape" && setSaving(null)}
-              />
-              <button className="btn small primary" type="submit" disabled={!saving.trim()}>Save</button>
-              <button className="btn small" type="button" onClick={() => setSaving(null)}>Cancel</button>
-            </form>
-          )}
-          {!state.presetStorageAvailable && (
-            <div className="hint-text">Your browser blocks storage, so saved Presets last only until you close this page.</div>
-          )}
-
-          <button className="disclosure" aria-expanded={fineTune} onClick={() => setFineTune((f) => !f)}>
-            {fineTune ? "Hide fine-tuning" : "Fine-tune…"}
-          </button>
-          {fineTune && (
-            <div className="fine">
-              <Slider
-                label={CONTROL_LABELS.retuneMs}
-                value={pc.settings.retuneMs}
-                min={0}
-                max={400}
-                step={5}
-                unit="ms"
-                hint="How fast notes snap to pitch. 0 ms is the robotic effect; higher is smoother."
-                onChange={(v) => set({ retuneMs: v })}
-                onCommit={() => commit("Retune Speed")}
-              />
-              <Slider
-                label={CONTROL_LABELS.amount}
-                value={pc.settings.amount}
-                min={0}
-                max={100}
-                unit="%"
-                hint="How far off-key notes are moved towards the right note."
-                onChange={(v) => set({ amount: v })}
-                onCommit={() => commit("Correction Amount")}
-              />
-              <Slider
-                label={CONTROL_LABELS.humanize}
-                value={pc.settings.humanize}
-                min={0}
-                max={100}
-                unit="%"
-                hint="Leaves small, expressive wobbles alone."
-                onChange={(v) => set({ humanize: v })}
-                onCommit={() => commit("Humanize")}
-              />
-              <Slider
-                label={CONTROL_LABELS.vibrato}
-                value={pc.settings.vibrato}
-                min={0}
-                max={100}
-                unit="%"
-                hint="Keeps your natural vibrato instead of flattening it."
-                onChange={(v) => set({ vibrato: v })}
-                onCommit={() => commit("Vibrato")}
-              />
-              <Slider
-                label={CONTROL_LABELS.mix}
-                value={pc.settings.mix}
-                min={0}
-                max={100}
-                unit="%"
-                hint="Blend of corrected and original voice."
-                onChange={(v) => set({ mix: v })}
-                onCommit={() => commit("Pitch Mix")}
-              />
-              <div className="row-between">
-                <span className="field-label" title="Keeps the character of your voice when notes are moved">
-                  Keep voice character (formants)
-                </span>
-                <Switch
-                  label="Keep voice character"
-                  checked={pc.settings.formant}
-                  onChange={(on) => {
-                    set({ formant: on });
-                    commit("Formant");
-                  }}
+                <input
+                  type="text"
+                  autoFocus
+                  aria-label="Preset name"
+                  placeholder="Name, e.g. My ballad"
+                  value={presetDraft}
+                  maxLength={30}
+                  onChange={(e) => setPresetDraft(e.target.value)}
+                  onKeyDown={(e) => e.key === "Escape" && setPresetDraft(null)}
                 />
+                <button className="btn small primary" type="submit" disabled={!draftName}>
+                  {replaces ? "Replace" : "Save"}
+                </button>
+                <button className="btn small" type="button" onClick={() => setPresetDraft(null)}>Cancel</button>
+              </form>
+            )}
+            {replaces && <div className="hint-text">You already have a Preset called "{draftName}" — saving replaces it.</div>}
+            {!state.presetStorageAvailable && (
+              <div className="hint-text">Your browser blocks storage, so saved Presets last only until you close this page.</div>
+            )}
+
+            <button className="disclosure" aria-expanded={fineTune} onClick={() => setFineTune((f) => !f)}>
+              {fineTune ? "Hide fine-tuning" : "Fine-tune…"}
+            </button>
+            {fineTune && (
+              <div className="fine">
+                {FINE_TUNE.map((c) => (
+                  <Slider
+                    key={c.key}
+                    label={c.label}
+                    value={pc.settings[c.key]}
+                    min={0}
+                    max={c.max}
+                    step={c.step}
+                    unit={c.unit}
+                    hint={c.hint}
+                    onChange={(v) => studio.setPitchCorrection({ [c.key]: v })}
+                    onCommit={() => commit(c.label)}
+                  />
+                ))}
+                <div className="row-between">
+                  <span className="field-label" title="Keeps the character of your voice when notes are moved">
+                    Keep voice character (formants)
+                  </span>
+                  <Switch
+                    label="Keep voice character"
+                    checked={pc.settings.formant}
+                    onChange={(on) => {
+                      studio.setPitchCorrection({ formant: on });
+                      commit("Keep voice character");
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          )}
-        </fieldset>
+            )}
+          </fieldset>
+        </>
       )}
     </Section>
   );
 }
-
-const PRESET_HINTS: Record<string, string> = {
-  Natural: "Gentle — barely noticeable",
-  Tight: "Clearly in tune, still human",
-  Hard: "The deliberate robotic auto-tune effect",
-};
 
 /** The Key notes are snapped to: detected automatically, can be overridden. */
 function KeyPicker({ studio, state }: { studio: Studio; state: StudioState }) {
@@ -309,7 +291,7 @@ function KeyPicker({ studio, state }: { studio: Studio; state: StudioState }) {
       : !found
         ? "Couldn't detect a Key — please pick one."
         : key.detected
-          ? "Detected from your Recording"
+          ? `${key.root} ${key.scale} (detected)`
           : null;
 
   return (

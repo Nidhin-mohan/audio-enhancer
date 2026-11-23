@@ -3,8 +3,19 @@
 //   one "gesture end" (for a single undo step) when you let go or finish with the keys;
 // - switches for on/off; segmented buttons for small sets of choices.
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState, type CSSProperties, type ReactNode } from "react";
 import { Chevron } from "./icons";
+
+/** "+3.5 dB", "0 dB", "-6.0 dB". */
+export const formatDb = (db: number) => (db === 0 ? "0 dB" : `${db > 0 ? "+" : ""}${db.toFixed(1)} dB`);
+
+/** Paints the filled part of a range input's track (see `--fill` in studio.css). */
+export const fillStyle = (value: number, min: number, max: number) =>
+  ({ "--fill": `${((value - min) / (max - min)) * 100}%` }) as CSSProperties;
+
+/** Keys that change a range input; releasing one ends the gesture (one undo step). */
+export const endsKeyGesture = (key: string) =>
+  key.startsWith("Arrow") || key.startsWith("Page") || key === "Home" || key === "End";
 
 interface SliderProps {
   label: string;
@@ -29,8 +40,9 @@ export function Slider(p: SliderProps) {
   const id = useId();
   const shown = p.format
     ? p.format(p.value)
-    : `${p.unit === "dB" && p.value > 0 ? "+" : ""}${Number.isInteger(p.step ?? 1) ? Math.round(p.value) : p.value.toFixed(1)}${p.unit ? ` ${p.unit}` : ""}`;
-  const fill = ((p.value - p.min) / (p.max - p.min)) * 100;
+    : p.unit === "dB"
+      ? formatDb(p.value)
+      : `${Number.isInteger(p.step ?? 1) ? Math.round(p.value) : p.value.toFixed(1)}${p.unit ? ` ${p.unit}` : ""}`;
   return (
     <div className={`slider${p.disabled ? " is-disabled" : ""}`}>
       <div className="slider-top">
@@ -45,11 +57,11 @@ export function Slider(p: SliderProps) {
         step={p.step ?? 1}
         value={p.value}
         disabled={p.disabled}
-        style={{ "--fill": `${fill}%` } as React.CSSProperties}
+        style={fillStyle(p.value, p.min, p.max)}
         title={p.defaultValue !== undefined ? "Double-click to reset" : undefined}
         onChange={(e) => p.onChange(Number(e.target.value))}
         onPointerUp={p.onCommit}
-        onKeyUp={(e) => e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End" || e.key.startsWith("Page") ? p.onCommit() : undefined}
+        onKeyUp={(e) => endsKeyGesture(e.key) && p.onCommit()}
         onDoubleClick={() => {
           if (p.defaultValue === undefined) return;
           p.onChange(p.defaultValue);
@@ -111,15 +123,14 @@ export function Segmented<T extends string | number>(p: {
   );
 }
 
-/** A collapsible section of the Properties panel, with an optional on/off switch and value badge. */
+/** A collapsible section of the side panel, with an optional on/off switch and value badge. */
 export function Section(p: {
   title: string;
   badge?: ReactNode;
   toggle?: { checked: boolean; disabled?: boolean; onChange: (on: boolean) => void };
   children: ReactNode;
-  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(p.defaultOpen ?? true);
+  const [open, setOpen] = useState(true);
   return (
     <section className={`acc${open ? " open" : ""}`}>
       <div className="acc-h">

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Segmented } from "./controls";
+import { fillStyle, Segmented } from "./controls";
 import { EffectsNotice, NoiseReductionSection, PitchCorrectionSection, VocalBoostSection } from "./EffectsPanel";
 import { Icon, LoopIcon, PauseIcon, PlayIcon, StopIcon, VolumeIcon } from "./icons";
 import { MixdownSection, useMixdownExport } from "./MixdownPanel";
 import { RecordingLane } from "./RecordingLane";
 import { SeparationCard } from "./SeparationCard";
 import { StemLanes } from "./StemLanes";
-import { fmtClock, fmtShort, usePosition, useStudio } from "./useStudio";
+import { fmtClock, fmtShort, isSeparated, usePosition, useStudio } from "./useStudio";
 
 const PEAK_COUNT = 1200;
 
@@ -36,7 +36,7 @@ export function App() {
   const importFile = (file: File | undefined) => {
     if (!file) return;
     const { undo, redo } = studio.getState().history;
-    const separated = studio.getState().separation.status === "done";
+    const separated = isSeparated(studio.getState());
     if (undo.length > 0 || redo.length > 0 || separated) setPendingFile(file);
     else void loadFile(file);
   };
@@ -102,15 +102,21 @@ export function App() {
     };
   });
 
-  // Space toggles play/pause; B switches Original/Enhanced (not while typing or on a focused button).
+  // Space toggles play/pause, ←/→ seek 5 s, B switches Original/Enhanced — except while typing
+  // or when the focused control uses that key itself (buttons, switches, sliders, menus).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
-      const onControl = (e.target as HTMLElement).closest("select, button");
+      const onControl = (e.target as HTMLElement).closest(
+        "select, button, input, [role=slider], [role=radio], [role=switch]",
+      );
       if (e.code === "Space" && !onControl) {
         e.preventDefault();
         if (studio.getState().playing) studio.pause();
         else void studio.play();
+      } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !onControl && studio.getState().recording) {
+        e.preventDefault();
+        studio.seek(studio.getPosition() + (e.key === "ArrowLeft" ? -5 : 5));
       } else if (e.key.toLowerCase() === "b" && studio.getState().recording) {
         studio.setAB(studio.getState().transport.ab === "original" ? "processed" : "original");
       }
@@ -124,7 +130,7 @@ export function App() {
     setPanelOpen(true);
     requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
-  const separated = state.separation.status === "done";
+  const separated = isSeparated(state);
   const separating = state.separation.status === "running";
   const exported = exporter.status.kind === "done";
 
@@ -313,7 +319,7 @@ export function App() {
             min={0}
             max={100}
             value={Math.round(state.transport.listeningVolume * 100)}
-            style={{ "--fill": `${state.transport.listeningVolume * 100}%` } as React.CSSProperties}
+            style={fillStyle(state.transport.listeningVolume, 0, 1)}
             onChange={(e) => studio.setListeningVolume(Number(e.target.value) / 100)}
           />
         </label>

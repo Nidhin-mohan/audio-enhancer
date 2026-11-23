@@ -6,19 +6,21 @@ import { Icon } from "./icons";
 /** Measured on the target laptop: about 2.2 s of processing per second of audio. */
 const SECONDS_PER_AUDIO_SECOND = 2.2;
 
-const minutes = (sec: number) => {
-  if (sec < 60) return "less than a minute";
-  const m = Math.round(sec / 60);
-  return `about ${m} min`;
-};
+/** "less than a minute" / "about 3 min". */
+const durationPhrase = (sec: number) => (sec < 60 ? "less than a minute" : `about ${Math.round(sec / 60)} min`);
 
 /** The call to action for Separation, its progress, and what to do if it fails. */
 export function SeparationCard({ studio, state }: { studio: Studio; state: StudioState }) {
   const sep = state.separation;
   const duration = state.recording?.durationSec ?? 0;
-  const [cached, setCached] = useState(true);
+  /** null until checked, so the download note never flickers in or out. */
+  const [cached, setCached] = useState<boolean | null>(null);
   useEffect(() => {
-    void isSeparationModelCached().then(setCached);
+    let live = true;
+    void isSeparationModelCached().then((c) => live && setCached(c));
+    return () => {
+      live = false;
+    };
   }, [sep.status]);
   if (sep.status === "done") return null;
 
@@ -29,7 +31,7 @@ export function SeparationCard({ studio, state }: { studio: Studio; state: Studi
         ? `Downloading the Separation model — first time only (${pct}%)`
         : sep.phase === "preparing"
           ? "Getting ready…"
-          : `Separating into Stems… ${sep.etaSec !== undefined ? `${minutes(sep.etaSec)} left` : `${pct}%`}`;
+          : `Separating into Stems… ${sep.etaSec !== undefined ? `${durationPhrase(sep.etaSec)} left` : `${pct}%`}`;
     return (
       <div className="sep-card running" aria-live="polite">
         <div className="sep-row">
@@ -58,7 +60,7 @@ export function SeparationCard({ studio, state }: { studio: Studio; state: Studi
           <div className="muted">
             {sep.status === "error"
               ? sep.message
-              : `Splits it into vocals, drums, bass and other, so the voice can be cleaned, boosted and tuned on its own. Takes ${minutes(duration * SECONDS_PER_AUDIO_SECOND)} on this computer${cached ? "" : ", plus a one-time 172 MB download of the model"}. Your audio never leaves your computer.`}
+              : `Splits it into vocals, drums, bass and other, so the voice can be cleaned, boosted and tuned on its own. Takes ${durationPhrase(duration * SECONDS_PER_AUDIO_SECOND)} on this computer${cached === false ? ", plus a one-time 172 MB download of the model" : ""}. Your audio never leaves your computer.`}
           </div>
         </div>
         <button className="btn primary" onClick={() => void studio.separate()}>

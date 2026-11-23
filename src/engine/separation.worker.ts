@@ -6,19 +6,16 @@ import * as ort from "onnxruntime-web/webgpu";
 import { CONSTANTS, DemucsProcessor } from "demucs-web";
 import { MODEL_CACHE_NAME, SEPARATION_MODEL_URL, type SeparatedStems, type SeparationProgress } from "./separation";
 
-const MODEL_URL = SEPARATION_MODEL_URL;
-const CACHE_NAME = MODEL_CACHE_NAME;
-
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 const phase = (progress: SeparationProgress) => scope.postMessage({ type: "phase", progress });
 
 /** The model bytes: from Cache Storage if present, otherwise downloaded (with progress) and cached. */
 async function modelBytes(): Promise<ArrayBuffer> {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(MODEL_URL);
+  const cache = await caches.open(MODEL_CACHE_NAME);
+  const cached = await cache.match(SEPARATION_MODEL_URL);
   if (cached) return cached.arrayBuffer();
 
-  const response = await fetch(MODEL_URL);
+  const response = await fetch(SEPARATION_MODEL_URL);
   if (!response.ok || !response.body) throw new Error(`Couldn't download the Separation model (HTTP ${response.status}).`);
   const total = Number(response.headers.get("Content-Length")) || 172_000_000;
   const reader = response.body.getReader();
@@ -37,7 +34,7 @@ async function modelBytes(): Promise<ArrayBuffer> {
     bytes.set(c, o);
     o += c.length;
   }
-  await cache.put(MODEL_URL, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
+  await cache.put(SEPARATION_MODEL_URL, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
   return bytes.buffer;
 }
 

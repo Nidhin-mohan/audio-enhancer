@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { MixdownFormat, MixdownLoudness, Studio, StudioState } from "../engine/studio";
 import { Section, Segmented } from "./controls";
+import { isSeparated } from "./useStudio";
 
 type ExportStatus =
   | { kind: "idle" }
@@ -36,16 +37,18 @@ export function useMixdownExport(studio: Studio) {
   return { status, run };
 }
 
+const FORMATS: MixdownFormat[] = ["mp3", "wav", "aac"];
 const FORMAT_HINT: Record<MixdownFormat, string> = {
   mp3: "MP3 · 320 kbps — plays everywhere (WhatsApp, Instagram, YouTube…)",
   wav: "WAV · 16-bit — lossless, large file",
   aac: "AAC · 256 kbps (.m4a) — small, great quality",
 };
-const LOUDNESS_HINT: Record<MixdownLoudness, string> = {
-  [-16]: "-16 LUFS — a little quieter, more dynamic",
-  [-14]: "-14 LUFS — the standard for streaming apps",
-  [-9]: "-9 LUFS — loud, like commercial pop",
-};
+/** Quietest first; -14 LUFS is the default. */
+const LOUDNESS: { value: MixdownLoudness; label: string; hint: string }[] = [
+  { value: -16, label: "-16 LUFS", hint: "-16 LUFS — a little quieter, more dynamic" },
+  { value: -14, label: "-14 LUFS", hint: "-14 LUFS — the standard for streaming apps (default)" },
+  { value: -9, label: "-9 LUFS", hint: "-9 LUFS — loud, like commercial pop" },
+];
 
 export function MixdownSection(props: {
   studio: Studio;
@@ -68,7 +71,7 @@ export function MixdownSection(props: {
         label="Format"
         value={format}
         disabled={disabled}
-        options={(["mp3", "wav", "aac"] as const).map((f) => ({
+        options={FORMATS.map((f) => ({
           value: f,
           label: f.toUpperCase(),
           disabled: !supported.includes(f),
@@ -85,17 +88,13 @@ export function MixdownSection(props: {
         label="Loudness"
         value={loudness}
         disabled={disabled}
-        options={([-16, -14, -9] as const).map((l) => ({
-          value: l,
-          label: l === -14 ? "Streaming" : l === -16 ? "Quieter" : "Loud",
-          title: LOUDNESS_HINT[l],
-        }))}
+        options={LOUDNESS.map(({ value, label, hint }) => ({ value, label, title: hint }))}
         onChange={(l) => {
           studio.setMixdown({ loudness: l });
           studio.commit("Mixdown loudness");
         }}
       />
-      <div className="hint-text">{LOUDNESS_HINT[loudness]}</div>
+      <div className="hint-text">{LOUDNESS.find((l) => l.value === loudness)?.hint}</div>
       <button
         className="btn primary wide"
         disabled={disabled || status.kind === "running"}
@@ -108,10 +107,10 @@ export function MixdownSection(props: {
           <div style={{ width: `${status.progress * 100}%` }} />
         </div>
       )}
-      {status.kind === "done" && <div className="ok" role="status">✓ Saved {status.fileName}</div>}
+      {status.kind === "done" && <div className="ok" role="status">✓ Mixdown ready — saved as {status.fileName}</div>}
       {status.kind === "error" && <div className="error" role="alert">{status.message}</div>}
       {disabled && <div className="hint-text">Import a Recording to export a Mixdown.</div>}
-      {!disabled && state.separation.status !== "done" && (
+      {!disabled && !isSeparated(state) && (
         <div className="hint-text">Tip: separate first to include Noise Reduction, Vocal Boost and Pitch Correction.</div>
       )}
     </Section>
