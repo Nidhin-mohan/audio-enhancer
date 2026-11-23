@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { createStudio, type Studio } from "./studio";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStudio, type PitchPicture, type Studio } from "./studio";
 import { sine, wavFile } from "../test/audio-fixtures";
 import { fakeSeparator, type FakeStem } from "../test/fake-separator";
 
@@ -94,6 +94,41 @@ describe("Pitch Correction", () => {
     s.setPitchCorrection({ mix: 100, enabled: false });
     const off = await sung(s);
     expect(Math.abs(cents(frequency(off.data, off.sr, 0.6, 1.8), 460))).toBeLessThan(3);
+  });
+});
+
+describe("Pitch picture", () => {
+  const tracked = async (s: Studio) => {
+    await vi.waitFor(() => expect(s.getState().pitchTrack).toBe("ready"), { timeout: 15_000 });
+    return s;
+  };
+  const at = (pic: PitchPicture, sec: number) => Math.round(sec / pic.frameSec);
+
+  it("is not available before Separation", async () => {
+    studio = createStudio({ separator: fakeSeparator({ vocals: offKeyNote }), storage: memoryStorage() });
+    await studio.load(wavFile([new Float32Array(SR * 2)], SR));
+    expect(studio.getState().pitchTrack).toBe("idle");
+    expect(studio.getPitchPicture()).toBeNull();
+  });
+
+  it("shows the sung note and where Pitch Correction moves it on the Key grid", async () => {
+    const s = await tracked(await singing());
+    s.applyPitchPreset("Hard");
+    const pic = s.getPitchPicture()!;
+    expect(pic.sung[at(pic, 1.2)]).toBeCloseTo(69.77, 1); // 460 Hz, between A4 (69) and A#4 (70)
+    expect(pic.corrected[at(pic, 1.2)]).toBeCloseTo(69, 1); // snapped to A, in C major
+    expect(pic.sung[at(pic, 0.1)]).toBeNaN(); // silence before the note
+  });
+
+  it("reflects the current settings", async () => {
+    const s = await tracked(await singing());
+    s.applyPitchPreset("Hard");
+    s.setKey({ scale: "chromatic" });
+    let pic = s.getPitchPicture()!;
+    expect(pic.corrected[at(pic, 1.2)]).toBeCloseTo(70, 1); // the nearer A#
+    s.setPitchCorrection({ enabled: false });
+    pic = s.getPitchPicture()!;
+    expect(pic.corrected[at(pic, 1.2)]).toBeCloseTo(pic.sung[at(pic, 1.2)], 5); // off: nothing moves
   });
 });
 

@@ -6,7 +6,7 @@ import { mixOffline, schedulePlayback, type Layer, type ScheduledPlayback, type 
 import { createHistory, type HistoryLabels } from "./history";
 import type { DetectedKey, NoteName, Scale } from "./key";
 import { integratedLoudness } from "./loudness";
-import type { PitchSettings } from "./pitch";
+import { pitchPicture, type PitchPicture, type PitchSettings } from "./pitch";
 import {
   BUILT_IN_PRESETS,
   defaultStorage,
@@ -27,8 +27,10 @@ import {
 import { runWorker } from "./workers";
 
 export type { DetectedKey, HistoryLabels, MixdownFormat, MixdownLoudness, NoteName, Scale, Trim };
-export type { SeparationState, Separator, StemName, PitchSettings, PitchPreset, PresetStorage };
+export type { SeparationState, Separator, StemName, PitchPicture, PitchSettings, PitchPreset, PresetStorage };
 export { STEM_NAMES };
+export { NOTES } from "./key";
+export { SCALE_DEGREES } from "./pitch";
 
 /** The Key Pitch Correction snaps to; `detected` is true while it follows the detected Key. */
 export interface MixKey {
@@ -114,6 +116,8 @@ export interface StudioState {
   separation: SeparationState;
   /** True while the vocals' effects (Noise Reduction, Pitch Correction) are being recalculated. */
   processingVocals: boolean;
+  /** Tracking the sung pitch of the vocals Stem for the pitch picture (starts after Separation). */
+  pitchTrack: "idle" | "tracking" | "ready";
   /** Built-in Pitch Correction Presets followed by the user's saved ones. */
   pitchPresets: PitchPreset[];
   /** False when browser storage is blocked: saved Presets then last only for this session. */
@@ -172,6 +176,8 @@ export interface Studio {
   setKey(patch: Partial<Pick<MixKey, "root" | "scale">>): void;
   /** Go back to following the detected Key. */
   useDetectedKey(): void;
+  /** Sung vs corrected pitch for the current Pitch Correction settings; null until `pitchTrack` is "ready". */
+  getPitchPicture(): PitchPicture | null;
   setMixdown(patch: Partial<MixdownSettings>): void;
   /** Formats this browser can export (AAC depends on built-in encoder support). */
   supportedMixdownFormats(): Promise<MixdownFormat[]>;
@@ -297,6 +303,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
     keyDetection: "idle",
     separation: { status: "idle" },
     processingVocals: false,
+    pitchTrack: "idle",
     pitchPresets: allPresets(),
     presetStorageAvailable: saved.available,
   };
@@ -307,6 +314,8 @@ export function createStudio(options: StudioOptions = {}): Studio {
   let vocalJob: { key: string; worker: Worker; waiters: Waiter[] } | null = null;
   let vocalTimer = 0;
   let suggestedBoostDb = 0;
+  /** Sung pitch of the vocals Stem per analysis frame, for the pitch picture. */
+  let vocalsPitch: { f0: Float32Array; sampleRate: number } | null = null;
   listeningGain.gain.value = state.transport.listeningVolume;
   const history = createHistory<Mix>(state.mix);
   let buffer: AudioBuffer | null = null;
@@ -534,6 +543,24 @@ export function createStudio(options: StudioOptions = {}): Studio {
       });
   };
 
+  /** Track the vocals' sung pitch once in a worker; settings changes only redo the cheap correction curve. */
+  const trackVocalsInBackground = (vocals: AudioBuffer, token: number) => {
+    const mono = new Float32Array(vocals.length);
+    for (let c = 0; c < vocals.numberOfChannels; c++) {
+      const data = vocals.getChannelData(c);
+      for (let i = 0; i < mono.length; i++) mono[i] += data[i] / vocals.numberOfChannels;
+    }
+    setState({ pitchTrack: "tracking" });
+    const worker = new Worker(new URL("./pitch-track.worker.ts", import.meta.url), { type: "module" });
+    runWorker<Float32Array>(worker, { mono, sampleRate: vocals.sampleRate }, [mono.buffer])
+      .then((f0) => {
+        if (token !== loadToken) return;
+        vocalsPitch = { f0, sampleRate: vocals.sampleRate };
+        setState({ pitchTrack: "ready" });
+      })
+      .catch(() => token === loadToken && setState({ pitchTrack: "idle" }));
+  };
+
   const toBuffers = (separated: SeparatedStems): Record<StemName, AudioBuffer> => {
     const out = {} as Record<StemName, AudioBuffer>;
     for (const n of STEM_NAMES) {
@@ -560,6 +587,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
       vocalJob?.waiters.forEach((w) => w.resolve()); // their Stems are gone; nothing left to wait for
       vocalJob = null;
       processedVocals = null;
+      vocalsPitch = null;
       buffer = decoded;
       stems = null;
       offset = 0;
@@ -582,6 +610,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
         keyDetection: "detecting",
         separation: { status: "idle" },
         processingVocals: false,
+        pitchTrack: "idle",
       });
       detectKeyInBackground(decoded, ++loadToken);
     },
@@ -685,6 +714,7 @@ export function createStudio(options: StudioOptions = {}): Studio {
         setState({ separation: { status: "done" }, mix: adopt(state.mix), history: history.labels() });
         restartIfPlaying(); // switch what's playing to the Stems
         void ensureVocals(); // apply the default vocal effects
+        trackVocalsInBackground(stems.vocals, token);
       } catch (e) {
         if (token !== loadToken) return;
         if (abort.signal.aborted || (e instanceof DOMException && e.name === "AbortError")) {
@@ -725,6 +755,12 @@ export function createStudio(options: StudioOptions = {}): Studio {
       if (!found) return;
       const pc = state.mix.pitchCorrection;
       applyMix({ ...state.mix, pitchCorrection: { ...pc, key: { ...found, detected: true } } });
+    },
+    getPitchPicture() {
+      if (!vocalsPitch) return null;
+      const pc = state.mix.pitchCorrection;
+      const job = pc.enabled ? { root: pc.key.root, scale: pc.key.scale, settings: pc.settings } : null;
+      return pitchPicture(vocalsPitch.f0, vocalsPitch.sampleRate, job);
     },
     setPitchCorrection(patch) {
       const { enabled, ...controls } = patch;

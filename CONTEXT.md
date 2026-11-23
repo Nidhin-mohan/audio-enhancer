@@ -32,7 +32,10 @@ _Avoid_: auto-tune (fine in conversation, but not as the term), tuning
 The musical key and scale (e.g. A minor) that Pitch Correction snaps notes to. Detected automatically from the Recording; the user can override it.
 
 **Pitch Correction Preset**:
-A named set of Pitch Correction settings. Three built-in ones, so the user doesn't have to adjust anything: **Natural** (gentle, barely audible), **Tight** (clearly in tune, still human), **Hard** (the deliberate robotic effect). Adjusting any setting yields an unsaved **Custom** state, which the user can save as their own named Preset.
+A named set of Pitch Correction settings. Three built-in ones, so the user doesn't have to adjust anything: **Natural** (gentle, barely audible), **Tight** (clearly in tune, still human), **Hard** (the deliberate robotic effect). Adjusting any setting yields an unsaved **Custom** state, which the user can save as their own named Preset. The setting that blends corrected and original voice is called **Blend** (not "mix", which means the Mix).
+
+**Pitch picture**:
+A graph in the Pitch Correction section of the notes as sung and as corrected, drawn over the notes of the Key, so the user can see what Pitch Correction is doing with the current settings.
 _Avoid_: profile, mode
 
 **Trim**:

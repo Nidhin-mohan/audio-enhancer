@@ -28,7 +28,8 @@ export interface PitchJob {
   settings: PitchSettings;
 }
 
-const SCALES: Record<Scale, number[]> = {
+/** Semitones above the root that belong to each scale. */
+export const SCALE_DEGREES: Record<Scale, number[]> = {
   major: [0, 2, 4, 5, 7, 9, 11],
   minor: [0, 2, 3, 5, 7, 8, 10],
   chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
@@ -128,7 +129,7 @@ export function trackPitch(mono: Float32Array, sampleRate: number): Float32Array
 
 /** Nearest note of the scale to `midi` (fractional MIDI note number). */
 function nearestScaleNote(midi: number, root: number, scale: Scale): number {
-  const degrees = SCALES[scale];
+  const degrees = SCALE_DEGREES[scale];
   let best = midi;
   let bestDist = Infinity;
   const base = Math.floor(midi) - 12;
@@ -181,6 +182,27 @@ export function correctionRatios(f0: Float32Array, sampleRate: number, job: Pitc
     ratios[i] = Math.pow(2, current / 12);
   }
   return ratios;
+}
+
+/** Sung and corrected pitch over time, for drawing against the Key's notes. */
+export interface PitchPicture {
+  /** Seconds between frames; frame i is at i·frameSec. */
+  frameSec: number;
+  /** Sung pitch as a fractional MIDI note number (69 = A4); NaN where nothing is sung. */
+  sung: Float32Array;
+  /** Where Pitch Correction moves it with the given settings (equal to `sung` when off). */
+  corrected: Float32Array;
+}
+
+/** `job` null means Pitch Correction is off. */
+export function pitchPicture(f0: Float32Array, sampleRate: number, job: PitchJob | null): PitchPicture {
+  const sung = f0.map((f) => (f > 0 ? 69 + 12 * Math.log2(f / 440) : NaN));
+  const corrected = sung.slice();
+  if (job) {
+    const ratios = correctionRatios(f0, sampleRate, job);
+    for (let i = 0; i < corrected.length; i++) corrected[i] += 12 * Math.log2(ratios[i]);
+  }
+  return { frameSec: (HOP * DECIMATE) / sampleRate, sung, corrected };
 }
 
 /**
